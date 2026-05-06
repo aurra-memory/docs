@@ -32,7 +32,7 @@ Google (Vertex/Gemini) and Bedrock are Phase 3 targets.
 
 ## Passing BYO-LLM
 
-The `llm` field accepts an object with provider, model, key, and (optionally) base_url and extra.
+The `llm` field accepts an object with `provider`, `api_key`, `model`, and (optionally) `base_url` (for Azure or OpenAI-compatible endpoints) and `api_version` (Azure only, defaults to a recent stable version).
 
 ### Anthropic
 
@@ -44,7 +44,7 @@ curl -X POST https://api.aurra.us/agent/memories \
     "llm": {
       "provider": "anthropic",
       "model": "claude-opus-4-7",
-      "key": "sk-ant-api03-your-key-here"
+      "api_key": "sk-ant-api03-your-key-here"
     }}'
 ```
 
@@ -58,7 +58,7 @@ curl -X POST https://api.aurra.us/agent/memories \
     "llm": {
       "provider": "openai",
       "model": "gpt-4o",
-      "key": "sk-proj-your-key-here"
+      "api_key": "sk-proj-your-key-here"
     }}'
 ```
 
@@ -69,9 +69,9 @@ curl -X POST https://api.aurra.us/agent/memories \
   "llm": {
     "provider": "azure",
     "model": "my-gpt4o-deployment",
-    "key": "your-azure-key",
+    "api_key": "your-azure-key",
     "base_url": "https://your-resource.openai.azure.com",
-    "extra": { "api_version": "2024-08-01-preview" }
+    "api_version": "2024-08-01-preview"
   }}
 ```
 
@@ -82,7 +82,7 @@ curl -X POST https://api.aurra.us/agent/memories \
   "llm": {
     "provider": "openai",
     "model": "meta-llama/Llama-4-70b-instruct",
-    "key": "your-key",
+    "api_key": "your-key",
     "base_url": "https://api.together.xyz/v1"
   }}
 ```
@@ -123,7 +123,7 @@ This is usually a win above some volume. At small scale, Aurra's bundled LLM is 
 | `401` (or propagated) | Your key is rejected by the provider. The provider's error message is passed through in `detail`. |
 | `422` | Model ID invalid for the provider. |
 | `429` (propagated) | Your provider returned a rate limit. Retry with backoff. |
-| `503` | Your provider was unreachable. Aurra does not fall back to its bundled LLM when you pass `llm` - you explicitly chose a provider. |
+| `502` | Your provider was unreachable or returned an error. Aurra does not fall back to its bundled LLM when you pass `llm` — you explicitly chose a provider. |
 
 ## When to use it
 
