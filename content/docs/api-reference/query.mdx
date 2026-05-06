@@ -1,0 +1,169 @@
+---
+title: Query
+description: Citation-grounded retrieval with source filtering and supersession-aware results.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Query turns a natural-language question into a grounded answer. Aurra retrieves relevant memories, passes them to an LLM, and returns an answer along with the specific memories that support it.
+
+## POST /agent/query
+
+Citation-grounded query. Returns an answer, an annotated answer with inline citation markers, and the full set of cited memories.
+
+### Request body
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `question` | string | Yes | The natural-language question to answer. |
+| `limit` | integer | No (default `10`) | Max memories to retrieve for the LLM context. |
+| `tenant_id` | string | No | Scope retrieval to a single tenant. `null` means default tenant. |
+| `sources` | array of string | No | Restrict retrieval to specific sources. Omit to search all. |
+
+<Callout type="info">
+**Source values depend on how the memory was written.** Content-mode writes default to `agent`. Messages-mode writes default to `agent_session`. Custom sources (e.g. `slack`, `notion`, `email`) reflect what you passed at write time.
+</Callout>
+
+### Example
+
+<Tabs items={["cURL", "Python", "JavaScript"]}>
+
+<Tab value="cURL">
+```bash
+curl -X POST https://api.aurra.us/agent/query \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "Where does Alice work?",
+    "tenant_id": "acme-demo",
+    "limit": 5
+  }'
+```
+</Tab>
+
+<Tab value="Python">
+```python
+result = client.agent.query(
+    question="Where does Alice work?",
+    tenant_id="acme-demo",
+    limit=5,
+)
+
+print(result["answer"])
+for c in result["citations"]:
+    print(f'[mem-{c["index"]}] {c["decision"]} (sim={c["similarity"]:.2f})')
+```
+</Tab>
+
+<Tab value="JavaScript">
+```javascript
+const result = await client.agent.query({
+  question: "Where does Alice work?",
+  tenantId: "acme-demo",
+  limit: 5,
+});
+
+console.log(result.answer);
+for (const c of result.citations) {
+  console.log(`[mem-${c.index}] ${c.decision} (sim=${c.similarity.toFixed(2)})`);
+}
+```
+</Tab>
+
+</Tabs>
+
+### Response (200)
+
+```json
+{
+  "question": "Where does Alice work?",
+  "answer": "Alice Chen works at Acme Corp as a senior backend engineer. Her employee ID is 4421, and she joined Acme Corp on March 15, 2024.",
+  "answer_with_citations": "Alice Chen [mem-1] works at Acme Corp as a senior backend engineer [mem-2]. Her employee ID is 4421 [mem-3], and she joined Acme Corp on March 15, 2024 [mem-4].",
+  "citations": [
+    {
+      "memory_id": "e626c0e4-83c7-4b5f-adfa-fdb9300b2e33",
+      "decision": "User's name is Alice Chen",
+      "topic": "Identity",
+      "similarity": 0.4941,
+      "cited_by_llm": true,
+      "valid_from": "2026-05-05T23:10:06.368062+00:00",
+      "is_superseded": false,
+      "tenant_id": "acme-demo",
+      "source": "agent_session"
+    },
+    {
+      "memory_id": "60995468-49d0-487a-ba35-cb549da57808",
+      "decision": "User works as a senior backend engineer at Acme Corp",
+      "topic": "Employment",
+      "similarity": 0.4731,
+      "cited_by_llm": true,
+      "valid_from": "2026-05-05T23:10:08.021475+00:00",
+      "is_superseded": false,
+      "tenant_id": "acme-demo",
+      "source": "agent_session"
+    }
+  ],
+  "memories": [ /* full memory objects, omitted for brevity. Use /agent/memories if you need them. */ ],
+  "memories_searched": 4,
+  "company_id": "user_3CyGtiPsbcMjBvQYnsU47r4hWKF"
+}
+```
+
+### Response fields
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `question` | string | Echo of the question you passed. Useful for correlating async calls. |
+| `answer` | string | The LLM's answer in plain prose. |
+| `answer_with_citations` | string | The same answer with inline `[mem-N]` markers referencing `citations[N]`. |
+| `citations` | array | Only memories the LLM actually cited. See fields below. |
+| `memories` | array | All memories retrieved (cited + not cited). Full memory objects. |
+| `memories_searched` | integer | Total memories retrieved and passed to the LLM (>= citations.length). |
+| `company_id` | string | Your Clerk user ID. |
+
+### Citation fields
+
+Each entry in `citations[]` has:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `memory_id` | UUID | Use to fetch full memory, timeline, or audit. |
+| `decision` | string | The canonical fact (what Aurra extracted). |
+| `topic` | string | Category label assigned at extraction. |
+| `similarity` | float (0-1) | Vector cosine similarity to the question embedding. |
+| `cited_by_llm` | boolean | `true` if the LLM actually referenced this memory in the answer. |
+| `valid_from` | ISO 8601 | When this fact became true. |
+| `is_superseded` | boolean | `true` if this memory has since been replaced. Retrieval prefers current facts by default. |
+| `tenant_id` | string | Tenant scope of this memory. |
+| `source` | string | Origin tag (`agent`, `slack`, `agent_session`, etc.) |
+
+### Using cited_by_llm
+
+`cited_by_llm` distinguishes **retrieved** from **used**. Aurra retrieves the top `limit` memories by similarity, then the LLM decides which of those to actually use. Memories with `cited_by_llm: false` were retrieved (relevant by similarity) but not referenced in the answer.
+
+For UIs, we recommend only showing `cited_by_llm: true` in the primary citations list, and exposing the rest as "related".
+
+### Empty results
+
+If no memories match (or your `sources` filter excludes everything):
+
+```json
+{
+  "question": "Where does Alice work?",
+  "answer": "No memories found for this company yet.",
+  "answer_with_citations": "No memories found for this company yet.",
+  "citations": [],
+  "memories": [],
+  "memories_searched": 0,
+  "company_id": "user_3CyGtiPsbcMjBvQYnsU47r4hWKF"
+}
+```
+
+Aurra never hallucinates an answer when no memories are found. You always get the explicit "No memories found" response.
+
+### Supersession-aware retrieval
+
+By default, query returns **current** memories only. If a fact has been superseded, the new version wins and the old version is excluded from retrieval.
+
+To query the past explicitly, use [`GET /memories/{id}/timeline`](/docs/api-reference/timeline) or [`GET /agent/memories`](/docs/api-reference/memories) with `as_of`.

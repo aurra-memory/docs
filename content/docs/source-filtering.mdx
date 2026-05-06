@@ -1,0 +1,112 @@
+---
+title: Source-Filtered Retrieval
+description: Restrict queries and listings to memories from specific origins (Slack, Notion, agent, etc.).
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Every memory in Aurra carries a `source` field describing where it came from. Source-filtered retrieval lets you answer questions like "what did my agent learn from Slack this week" or "query only facts captured during chat sessions".
+
+## The source field
+
+When you write a memory via [`POST /agent/memories`](/docs/api-reference/memories), `source` is an optional string that tags the memory's origin.
+
+Conventions Aurra recognizes:
+
+| Source | Typical origin |
+| --- | --- |
+| `agent` | Direct write from agent code (content mode). Aurra's default for `content`-mode writes without an explicit `source`. |
+| `agent_session` | Extracted from a chat conversation (messages mode). Aurra's default for `messages`-mode writes. |
+| `slack` | Slack messages or threads. |
+| `notion` | Notion pages or database rows. |
+| `email` | Email subjects, bodies, or attachments. |
+| `crm` | Salesforce, HubSpot, attio, etc. |
+| `ticket` | Jira, Linear, Intercom, Zendesk, etc. |
+
+You can also use custom strings (`git_commit`, `calendar`, `transcript`, etc.). Aurra does not enforce a fixed enum.
+
+<Callout type="warn">
+**`agent` and `agent_session` are different values.** A filter for `sources: ["agent"]` will **not** return messages-mode extractions (which tag as `agent_session`). If you want both, pass `sources: ["agent", "agent_session"]`.
+</Callout>
+
+## Filtering on query
+
+Pass `sources` as an array on [`POST /agent/query`](/docs/api-reference/query):
+
+```bash
+curl -X POST https://api.aurra.us/agent/query \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What did engineering decide about pagination?", "sources": ["slack"]}'
+```
+
+Retrieval excludes every memory with a different `source`. If no memories match the filter (or none match the semantic query within the filtered subset), you get the explicit empty results response (see [citations](/docs/citations)).
+
+The filter is applied at SQL before vector search, so it's cheap and deterministic (not an LLM choice).
+
+## Filtering on list
+
+Pass `source` as a query-param string (not an array) on `GET /agent/memories`:
+
+```bash
+curl "https://api.aurra.us/agent/memories?source=slack&limit=50" \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+Useful for building source-segmented dashboards or running source-specific cleanup jobs.
+
+<Callout type="info">
+**Api inconsistency - known.** `/agent/query` accepts `sources` (array). `/agent/memories` accepts `source` (single string). Unification is on the Phase 2 backlog.
+</Callout>
+
+## Patterns
+
+### Multi-source agents
+
+If your agent ingests from multiple systems, tag each write with the right source so you can answer "where did this knowledge come from" queries later.
+
+```python
+# Slack ingestion
+client.memories.add(
+    content="Engineering decided to ship cursor pagination instead of offset.",
+    source="slack",
+    tenant_id="acme-demo",
+)
+
+# Notion ingestion
+client.memories.add(
+    content="Roadmap for Q3 includes an api rate-limiting overhaul.",
+    source="notion",
+    tenant_id="acme-demo",
+)
+
+# Later: credibility query scoped to engineering chat
+answer = client.agent.query(
+    question="What did engineering decide about pagination?",
+    sources=["slack"],
+    tenant_id="acme-demo",
+)
+```
+
+### Trust-level routing
+
+Some sources are high-trust (CRM after a human review) and some are low-trust (auto-extracted chat). You can use source filters to route queries appropriately:
+
+- For surfacing facts in a customer-facing response: restrict to `crm` + `email`.
+- For internal debugging: allow all sources.
+- For compliance reports: restrict to explicit-consent sources only.
+
+### Per-integration debugging
+
+To verify your Slack ingestion is working, query with `source: slack` and confirm counts match expectations. If counts are zero, the ingestion pipeline is broken - not retrieval.
+
+## Original input preservation
+
+Every memory also carries a `source_citation` object with the original input text and capture timestamp. Source filtering trims the search space; `source_citation` preserves the paper trail. See [provenance in the audit endpoint](/docs/api-reference/audit).
+
+## Next steps
+
+- [Query API](/docs/api-reference/query) - full field reference for `sources`.
+- [Memories API](/docs/api-reference/memories) - complete `source` query-param docs.
+- [Audit API](/docs/api-reference/audit) - inspect `provenance.original_input` for any stored memory.
+- [BYO-LLM](/docs/byo-llm) - swap the extraction model per source if needed.

@@ -1,0 +1,152 @@
+---
+title: Auto-Supersession (Level 2)
+description: Aurra detects when a new fact replaces an old one and applies the supersession automatically.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Level 1 supersession (the [supersede endpoint](/docs/api-reference/supersede)) is manual: your code decides what replaces what. Level 2 is automatic: Aurra compares each new fact against existing ones and supersedes the old version without you asking.
+
+<Callout type="warn">
+**Level 2 is off by default.** Turn it on explicitly via [`PATCH /agent/settings`](/docs/api-reference/settings) or per-request with `auto_supersede: true`. Auto-supersession modifies history - start with it in dev/staging before enabling in prod.
+</Callout>
+
+## The problem
+
+Your agent learns a fact:
+
+```
+"alice uses Vim"
+```
+
+Three weeks later, it learns another:
+
+```
+"alice switched to Emacs"
+```
+
+Both are now in memory. Next time your agent queries "what editor does Alice use?", it gets both memories back and must choose which one to trust - or worse, returns a confused "she has used both Vim and Emacs" answer.
+
+This is the drift problem. Over time, every memory system accumulates contradictions.
+
+Mem0 and similar systems handle this by having the retrieval-side LLM sort it out at query time. This works until it doesn't - and in our benchmarks (LoCoMo dataset), it hallucinates fabricated dates **on 23% of queries**.
+
+Aurra's approach is to resolve contradictions **at write time**, not at read time.
+
+## How it works
+
+When auto-supersession is enabled and you write a new memory, Aurra runs this pipeline:
+
+```
+1.  Extract new fact from input                         (existing flow)
+2.  Embed new fact and query for similar memories       (top k by cosine)
+3.  Gate : skip if topic is in excluded_categories      (enforced before LLM)
+4.  Classify (lightweight Claude Haiku call):
+     - "new fact" -> new row, no supersession
+     - "contradicts existing #17" -> supersede #17
+     - "supplements existing #17" -> new row alongside #17
+     - "duplicate of existing #17" -> reject write
+5.  Enforce : decision must have confidence >= min_confidence   (default 0.85)
+6.  Apply : write new row, if superseding also flip old row's valid_to/superseded_by
+7.  Record : audit event with classifier reasoning, confidence, and model ID
+```
+
+The result: your memory stays clean. Reads get a single current answer with full history available on demand.
+
+## Kill switches
+
+Aurra gives you four independent controls for when auto-supersession runs.
+
+| Kill switch | Scope | Default |
+| --- | --- | --- |
+| `auto_supersede_default` (settings) | Per-API-key default for all writes. | `false` |
+| `auto_supersede` (request) | Per-request override on `/agent/memories`. Wins over the settings default. | interits from settings |
+| `excluded_categories` (settings) | Topics that **never** reach the classifier. Hard code-level gate, not an LLM choice. | `["health_medical", "legal_status"]` |
+| `min_confidence` (settings) | Confidence floor for the classifier. Below this, Aurra rejects the classifier decision and falls back to a new row. | `0.85` |
+
+<Callout type="info">
+**The excluded_categories gate is deterministic.** If a new fact is tagged `health_medical`, the classifier never runs and no supersession is possible against it - even with 100% confidence. This is intentional. Certain categories should never be rewritten by an LLM, period.
+</Callout>
+
+## Enabling it
+
+Two ways to enable Level 2.
+
+### Per-key (recommended for staging/prod)
+
+```bash
+curl -X PATCH https://api.aurra.us/agent/settings \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"auto_supersede_default": true}'
+```
+
+From this point, every write with this key runs the classifier unless you set `auto_supersede: false` per-request.
+
+### Per-request (for experimentation)
+
+```json
+{
+  "messages": [...],
+  "auto_supersede": true
+}
+```
+
+This lets you turn it on for a single call while leaving the key-level default off.
+
+## Reading the classifier decision
+
+Every write returns an `auto_supersede` block so you can see what happened:
+
+```json
+"auto_supersede": {
+  "ran": true,
+  "skipped_reason": null,
+  "candidates_examined": 3,
+  "supersession": {
+    "superseded_id": "ba01899b-6294-4d53-8c04-2dd651e9500d",
+    "classifier": "contradicts",
+    "confidence": 0.92,
+    "reason": "The new fact directly replaces the editor preference in memory #01899b.",
+    "model": "claude-haiku-4-5-20251001"
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `ran` | `false` if gated (excluded category or disabled). `true` if the classifier actually executed. |
+| `skipped_reason` | Human-readable reason when `ran: false`. |
+| `candidates_examined` | How many existing memories were against for contradiction. |
+| `supersession` | `null` if no supersession happened. Object if it did. |
+| `supersession.classifier` | One of `contradicts`, `supplements`, `duplicate`, `new_fact`. |
+| `supersession.confidence` | 0-1 float. Aurra rejects anything below `min_confidence`. |
+| `supersession.reason` | The classifier's explanation. Show this to users in audit UIs. |
+
+## Cost and latency
+
+Auto-supersession adds one Claude Haiku call per write (typically under 200ms, under $0.0001). You pay this cost only on writes that reach the classifier - excluded categories and disabled keys add zero overhead.
+
+Change the classifier model via `classifier_model` in settings if you need to swap for a cheaper or more accurate one. Must be an Anthropic model ID (external provider swap goes through [BYO-LLM](/docs/byo-llm)).
+
+## When to enable
+
+Enable Level 2 if:
+
+- Your agent writes similar facts over time (user preferences, project status, customer details).
+- You're seeing query results with multiple contradictory memories.
+- You want correctness guarantees at query time without relying on the retrieval LLM to pick the right fact.
+- You're targeting an enterprise use case where audit trails matter.
+
+Leave it disabled if:
+
+- Your agent writes mostly immutable facts (event logs, sensor data).
+- You're in early prototyping and don't want another LLM call per write.
+- You explicitly want to handle contradictions in your own app logic.
+
+## Next steps
+
+- [Settings API](/docs/api-reference/settings) - configure kill switches and classifier model.
+- [Audit API](/docs/api-reference/audit) - inspect the classifier's reasoning for any supersession.
+- [Bi-temporal memory](/docs/bi-temporal) - why preserving history matters for compliance.
+- [BYO-LLM](/docs/byo-llm) - swap the classifier to a different provider.

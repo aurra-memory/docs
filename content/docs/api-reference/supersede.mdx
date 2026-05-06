@@ -1,0 +1,112 @@
+---
+title: Supersede
+description: Manual Level 1 supersession with full audit trail.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Supersession marks an old memory as no longer current without deleting it. The old row stays in the database with a `valid_to` timestamp and a pointer to what replaced it, giving you a full audit trail.
+
+<Callout type="info">
+**This endpoint is Level 1 (manual) supersession.** The caller decides what replaces what. For Level 2 (LLM decides automatically on write), see [Auto-Supersession](/docs/level-2-supersession).
+</Callout>
+
+## POST `/memories/{memory_id}/supersede`
+
+Mark a specific memory as superseded.
+
+### Path parameters
+
+| Param | Type | Notes |
+| --- | --- | --- |
+| `memory_id` | UUID | The memory to supersede. Must belong to your account. |
+
+### Request body
+
+Exactly one of `superseded_by` or `valid_to` must be provided.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `superseded_by` | UUID | ID of the new memory that replaces this one. Use when the replacement exists. |
+| `valid_to` | ISO 8601 timestamp | Explicit expiry timestamp. Use when a fact expired but no replacement exists (e.g. "Alice is on PTO until May 15"). |
+
+### Example: replace one fact with another
+
+<Tabs items={["cURL", "Python", "JavaScript"]}>
+
+<Tab value="cURL">
+```bash
+curl -X POST https://api.aurra.us/memories/ba01899b-6294-4d53-8c04-2dd651e9500d/supersede \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"superseded_by": "e626c0e4-83c7-4b5f-adfa-fdb9300b2e33"}'
+```
+</Tab>
+
+<Tab value="Python">
+```python
+result = client.memories.supersede(
+    memory_id="ba01899b-6294-4d53-8c04-2dd651e9500d",
+    superseded_by="e626c0e4-83c7-4b5f-adfa-fdb9300b2e33",
+)
+```
+</Tab>
+
+<Tab value="JavaScript">
+```javascript
+const result = await client.memories.supersede(
+  "ba01899b-6294-4d53-8c04-2dd651e9500d",
+  { supersededBy: "e626c0e4-83c7-4b5f-adfa-fdb9300b2e33" }
+);
+```
+</Tab>
+
+</Tabs>
+
+### Example: expire a fact without a replacement
+
+```bash
+curl -X POST https://api.aurra.us/memories/ba01899b-6294-4d53-8c04-2dd651e9500d/supersede \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"valid_to": "2026-05-15T00:00:00Z"}'
+```
+
+### Response (200)
+
+```json
+{
+  "status": "superseded",
+  "memory_id": "ba01899b-6294-4d53-8c04-2dd651e9500d",
+  "superseded_by": "e626c0e4-83c7-4b5f-adfa-fdb9300b2e33",
+  "valid_to": "2026-05-05T23:11:42.886079+00:00"
+}
+```
+
+After supersession:
+
+- The old memory (`memory_id`) gets `valid_to` set and `temporal.is_superseded = true`.
+- @`GET /agent/memories` and `POST /agent/query` exclude it by default. Pass `include_superseded=true` on the list endpoint to see it.
+- [`GET /memories/{memory_id}/timeline`](/docs/api-reference/timeline) returns the entire chain (old + new) ordered by `valid_from`.
+- [`GET /memories/{memory_id}/audit`](/docs/api-reference/audit) records the supersession event in `history[]`.
+
+### Error responses
+
+| Status | Trigger |
+| --- | --- |
+| `400` | Neither `superseded_by` nor `valid_to` provided, or both provided. |
+| `403` | `memory_id` exists but belongs to another account. |
+| `404` | `memory_id` does not exist. |
+| `422` | UUID format invalid or timestamp not ISO 8601. |
+
+## When to use supersede vs delete
+
+| Scenario | Use |
+| --- | --- |
+| Fact changed (still important that it *used* to be true) | `supersede` with `superseded_by` |
+| Fact expired (no replacement) | `supersede` with `valid_to` |
+| Memory is junk (never should have been stored) | [`DELETE /agent/memories`](/docs/api-reference/memories) (tenant-scoped) |
+| User data deletion request (GDPR, etc.) | `DELETE` with the specific tenant_id |
+
+Use supersession for anything where "how things changed" matters. Use delete only when the memory should never have existed or must be erased for compliance.

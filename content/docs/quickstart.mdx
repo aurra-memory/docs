@@ -1,0 +1,279 @@
+---
+title: Quickstart
+description: Install the SDK, store your first memory, and query it back with citations — in five minutes.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+<Callout type="warn">
+**SDKs ship Saturday, May 9, 2026.** The `pip install aurra` and `npm install aurra` commands below will work after that. Until then, use the **cURL** examples — they hit the same API.
+</Callout>
+
+## 1. Get an API key
+
+Sign up at [app.aurra.us](https://app.aurra.us) and open your dashboard. In the **API Keys** section, click **Create key** and copy the value (it starts with `aurra_`).
+
+You only see the full key once. Store it somewhere safe — environment variable, secret manager, password manager.
+
+```bash
+export AURRA_API_KEY="aurra_your_key_here"
+```
+
+## 2. Install the SDK
+
+<Tabs items={["Python", "JavaScript", "cURL"]}>
+
+<Tab value="Python">
+```bash
+pip install aurra
+```
+
+Requires Python 3.8+. Source: [aurra on PyPI](https://pypi.org/project/aurra/).
+</Tab>
+
+<Tab value="JavaScript">
+```bash
+npm install aurra
+```
+
+Works in Node 18+ and modern browsers. TypeScript types included. Source: [aurra on npm](https://www.npmjs.com/package/aurra).
+</Tab>
+
+<Tab value="cURL">
+No install needed — just `curl` and a key.
+</Tab>
+
+</Tabs>
+
+## 3. Store your first memory
+
+Aurra extracts durable facts from raw conversation. Send a `messages` array; Aurra figures out what is worth remembering.
+
+<Tabs items={["Python", "JavaScript", "cURL"]}>
+
+<Tab value="Python">
+```python
+from aurra import Aurra
+
+client = Aurra(api_key="aurra_your_key_here")
+
+result = client.memories.add(
+    messages=[
+        {"role": "user", "content": "Hi, I am Alice. I am a senior engineer at Acme."},
+        {"role": "assistant", "content": "Nice to meet you, Alice."},
+    ],
+    session_id="alice-session-1",
+)
+
+print(result)
+```
+</Tab>
+
+<Tab value="JavaScript">
+```javascript
+import { Aurra } from "aurra";
+
+const client = new Aurra({ apiKey: "aurra_your_key_here" });
+
+const result = await client.memories.add({
+  messages: [
+    { role: "user", content: "Hi, I am Alice. I am a senior engineer at Acme." },
+    { role: "assistant", content: "Nice to meet you, Alice." },
+  ],
+  sessionId: "alice-session-1",
+});
+
+console.log(result);
+```
+</Tab>
+
+<Tab value="cURL">
+```bash
+curl -X POST https://api.aurra.us/agent/memories \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "Hi, I am Alice. I am a senior engineer at Acme."},
+      {"role": "assistant", "content": "Nice to meet you, Alice."}
+    ],
+    "session_id": "alice-session-1"
+  }'
+```
+</Tab>
+
+</Tabs>
+
+You will get back something like:
+
+```json
+{
+  "status": "saved",
+  "memory_ids": ["mem_abc123", "mem_def456"],
+  "extracted": [
+    "Alice is a senior engineer at Acme",
+    "User name is Alice"
+  ]
+}
+```
+
+Aurra extracted **two** atomic facts from that exchange. Each gets its own memory ID, timestamp, and source provenance.
+
+## 4. Query with citations
+
+Now ask Aurra a question. It will retrieve relevant memories and return an answer that cites which memories it used.
+
+<Tabs items={["Python", "JavaScript", "cURL"]}>
+
+<Tab value="Python">
+```python
+result = client.agent.query(
+    question="Where does Alice work?",
+)
+
+print(result["answer"])
+print(result["answer_with_citations"])
+print(result["citations"])
+```
+</Tab>
+
+<Tab value="JavaScript">
+```javascript
+const result = await client.agent.query({
+  question: "Where does Alice work?",
+});
+
+console.log(result.answer);
+console.log(result.answerWithCitations);
+console.log(result.citations);
+```
+</Tab>
+
+<Tab value="cURL">
+```bash
+curl -X POST https://api.aurra.us/agent/query \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "Where does Alice work?"
+  }'
+```
+</Tab>
+
+</Tabs>
+
+Response shape:
+
+```json
+{
+  "answer": "Alice works at Acme.",
+  "answer_with_citations": "Alice works at Acme [mem-1].",
+  "citations": [
+    {
+      "index": 1,
+      "memory_id": "mem_abc123",
+      "content": "Alice is a senior engineer at Acme",
+      "similarity": 0.89,
+      "cited_by_llm": true,
+      "valid_from": "2026-05-05T19:20:00Z",
+      "is_superseded": false,
+      "source": "agent"
+    }
+  ],
+  "memories_searched": 2
+}
+```
+
+The `citations` array gives you the exact memories the answer is grounded in — with similarity scores, validity windows, and a `cited_by_llm` flag indicating whether the model actually used each one.
+
+## 5. Watch supersession in action
+
+Aurra bi-temporal memory tracks when facts change over time. Send a contradicting fact:
+
+<Tabs items={["Python", "JavaScript", "cURL"]}>
+
+<Tab value="Python">
+```python
+client.memories.add(
+    messages=[
+        {"role": "user", "content": "Update: I just joined Globex as a staff engineer."},
+    ],
+    session_id="alice-session-1",
+)
+
+result = client.agent.query(
+    question="Where does Alice work?",
+)
+
+print(result["answer"])
+```
+</Tab>
+
+<Tab value="JavaScript">
+```javascript
+await client.memories.add({
+  messages: [
+    { role: "user", content: "Update: I just joined Globex as a staff engineer." },
+  ],
+  sessionId: "alice-session-1",
+});
+
+const result = await client.agent.query({
+  question: "Where does Alice work?",
+});
+
+console.log(result.answer);
+```
+</Tab>
+
+<Tab value="cURL">
+```bash
+curl -X POST https://api.aurra.us/agent/memories \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "Update: I just joined Globex as a staff engineer."}
+    ],
+    "session_id": "alice-session-1"
+  }'
+
+curl -X POST https://api.aurra.us/agent/query \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "Where does Alice work?"
+  }'
+```
+</Tab>
+
+</Tabs>
+
+The new query returns "Alice works at Globex" — but the old memory is not deleted. Inspect the timeline:
+
+```bash
+curl https://api.aurra.us/memories/mem_abc123/timeline \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+You will see both facts, with `valid_from` / `valid_to` timestamps showing when the supersession happened. Full audit trail. No data loss.
+
+## What is next
+
+<Cards>
+  <Card title="API Reference" href="/docs/api-reference" description="Every endpoint, request shape, and error code." />
+  <Card title="Citation-Grounded Query" href="/docs/citations" description="Deep dive on how citations work and when to use cited_by_llm." />
+  <Card title="Source-Filtered Retrieval" href="/docs/source-filtering" description="Restrict retrieval to specific sources at query time." />
+  <Card title="Bi-temporal Memory" href="/docs/bi-temporal" description="The full supersession + audit story." />
+</Cards>
+
+## Troubleshooting
+
+**`401 Unauthorized`** — Your API key is missing, malformed, or revoked. Check `app.aurra.us/dashboard` and confirm the key is active.
+
+**`429 Too Many Requests`** — You are rate-limited on your current plan. See [Pricing](https://aurra.us/pricing).
+
+**Empty `extracted` array** — The conversation did not contain extractable facts (Aurra skips greetings, filler, etc.). This is correct behavior, not a bug.
+
+**Memory IDs differ from the docs** — Memory IDs are unique per request. Use whatever `memory_id` your response contains, not the docs example values.

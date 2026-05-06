@@ -1,0 +1,154 @@
+---
+title: Citation-Grounded Query
+description: Every answer points back to the specific memories that produced it. No hallucinations. No "out of thin air" answers.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Citation-grounded query means every answer from Aurra comes with the receipts : the actual memories the LLM used to produce it. If Aurra has no relevant memories, it says so directly instead of guessing.
+
+## The problem
+
+Most RAG-style memory systems do this:
+
+```
+1.  Retrieve top k memories by similarity.
+2.  Stuff them into a prompt.
+3.  Ask the LLM to answer the question.
+4.  Return whatever comes back.
+```
+
+This works right up until the LLM decides to fill gaps from its priors instead of the memories. Our benchmarks against LoCoMo show the average system fabricates concrete details (dates, names, numbers) on roughly 1 in 4 responses. The response reads confidently. The details are invented.
+
+Aurra fixes this by instrumenting the LLM call itself. The prompt asks for citation markers inline, and Aurra post-processes the response to extract (then verify) them.
+
+## Request
+
+The full endpoint reference is at [`POST /agent/query`](/docs/api-reference/query). At a minimum:
+
+```bash
+curl -X POST https://api.aurra.us/agent/query \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Where does Alice work?"}'
+```
+
+## Response anatomy
+
+The response has three elements that together form the citation contract.
+
+### 1. The plain answer
+
+```json
+"answer": "Alice Chen works at Acme Corp as a senior backend engineer. Her employee ID is 4421, and she joined Acme Corp on March 15, 2024."
+```
+
+Clean prose. This is what you render in a chat UI or read aloud.
+
+### 2. The annotated answer
+
+```json
+"answer_with_citations": "Alice Chen [mem-1] works at Acme Corp as a senior backend engineer [mem-2]. Her employee ID is 4421 [mem-3], and she joined Acme Corp on March 15, 2024 [mem-4]."
+```
+
+Each `[mem-N]` marker references `citations[N-1]` in the response. Render this directly if you want footnote-style annotations, or post-process to convert markers into clickable chips.
+
+### 3. The citations array
+
+```json
+"citations": [
+  {
+    "memory_id": "e626c0e4-83c7-4b5f-adfa-fdb9300b2e33",
+    "decision": "User's name is Alice Chen",
+    "topic": "Identity",
+    "similarity": 0.4941,
+    "cited_by_llm": true,
+    "valid_from": "2026-05-05T23:10:06.368062+00:00",
+    "is_superseded": false,
+    "tenant_id": "acme-demo",
+    "source": "agent_session"
+  }
+]
+```
+
+Each citation carries enough metadata to answer "where did this come from" and "is this still current" without a second roundtrip.
+
+## cited_by_llm: the important field
+
+Each citation has a `cited_by_llm` boolean. This distinguishes **retrieved** from **used**.
+
+- **Retrieved ** - pulled from the index by vector similarity. relevant enough to send to the LLM.
+- **Used ** (`cited_by_llm: true`) - the LLM actually grounded part of its answer in this memory.
+
+In practice, Aurra retrieves the top `limit` (default 10) memories for each query, and the LLM typically cites 2-6. The remaining memories are returned with `cited_by_llm: false` so you can surface them as "related" without cluttering the primary citations UI.
+
+<Callout type="info">
+**UI recommendation.** Render `cited_by_llm: true` citations as primary receipts. Put the rest behind a "Show related memories" disclosure. Users trust the answer more when they see fewer, high-signal citations than a firehose.
+</Callout>
+
+## Empty results
+
+If retrieval finds nothing, Aurra refuses to guess:
+
+```json
+{
+  "question": "Where does Alice work?",
+  "answer": "No memories found for this company yet.",
+  "answer_with_citations": "No memories found for this company yet.",
+  "citations": [],
+  "memories": [],
+  "memories_searched": 0
+}
+```
+
+This is the single most important property of the system. An agent built on Aurra can trust that a non-empty `citations` array means the answer is grounded in real stored data, and that an empty array means "I don't know" rather than "I made something up."
+
+## Typical integration patterns
+
+### Footnote-style render
+
+The simplest render: drop `answer_with_citations` into the UI, render `citations[]` as a numbered list below.
+
+```
+Alice Chen [1] works at Acme Corp as a senior backend engineer [2]...
+
+[1] "User's name is Alice Chen" - Identity, May 5, 2026
+[2] "User works as a senior backend engineer at Acme Corp" - Employment
+
+Application wins: readable, transparent, no JS needed.
+```
+
+### Hover/tap chips
+
+Convert each `[mem-N]` marker into an inline chip that reveals citation details on hover. Works well for agent chat UIs. Example pattern:
+
+```ts
+// Replace [mem-N] with <Citation chips
+const annotated = response.answer_with_citations.replace(
+  /\[\\mem-(\\d+)\\]/g,
+  (_, idx) => `<Citation index="${idx}" />`
+);
+```
+
+### Audit drill-down
+
+Each citation carries a `memory_id`. Link it to an audit view that calls [`GET /memories/{memory_id}/audit`](/docs/api-reference/audit) for full provenance - original input, extraction model, event history. Enterprise users expect this drill path.
+
+## Supersession-interaction
+
+By default, query returns only `is_superseded: false` memories. If a fact has been replaced, the new version wins and the old one is silently excluded from retrieval.
+
+This matters for citations : you'll never see a citation to a stale fact in a current-time query. If you need historical answers, pass `as_of` on `/agent/memories` and construct the query against that subset downstream.
+
+## Cost and latency
+
+Citation-grounded query adds no extra LLM calls beyond the natural answer-generation call. Citation markers are a prompt-level instruction to the same model, and extraction from the response is a regex. No second roundtrip, no extra cost.
+
+The only overhead is prompt tokens for the citation-instruction preamble (around 200 tokens).
+
+## Next steps
+
+- [Query API](/docs/api-reference/query) - full field reference and request options.
+- [Source-filtered retrieval](/docs/source-filtering) - restrict retrieval to specific origins.
+- [Audit API](/docs/api-reference/audit) - drill into any citation's provenance.
+- [Bi-temporal memory](/docs/bi-temporal) - understand why superseded memories are excluded from current-time citations.

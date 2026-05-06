@@ -1,0 +1,142 @@
+---
+title: Audit
+description: Full provenance, extraction metadata, and event history for any memory.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Audit returns everything Aurra knows about how a memory came to exist: what input produced it, which LLM extracted it, when, and every event that affected it since.
+
+<Callout type="info">
+**Audit vs timeline.** The [timeline](/docs/api-reference/timeline) endpoint shows every *version* of a fact. Audit shows every *event* that happened to one specific memory. Use timeline to reconstruct state over time; use audit to answer "where did this fact come from and what happened to it".
+</Callout>
+
+## GET `/memories/{memory_id}/audit`
+
+Get the full audit record for a single memory.
+
+### Path parameters
+
+| Param | Type | Notes |
+| --- | --- | --- |
+| `memory_id` | UUID | The memory to audit. Must belong to your account. |
+
+### Example
+
+```bash
+curl https://api.aurra.us/memories/ba01899b-6294-4d53-8c04-2dd651e9500d/audit \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+### Response (200)
+
+```json
+{
+  "memory_id": "ba01899b-6294-4d53-8c04-2dd651e9500d",
+  "memory": {
+    "summary": "Alice is a senior engineer at Acme Corp.",
+    "decision": "Alice is a senior engineer at Acme Corp.",
+    "topic": "people"
+  },
+  "provenance": {
+    "source_type": "agent",
+    "channel": "agent",
+    "tenant_id": "acme-demo",
+    "workspace_id": null,
+    "org_id": null,
+    "external_id": null,
+    "original_input": "Alice is a senior engineer at Acme Corp.",
+    "captured_at": "2026-05-05T23:09:59.063114+00:00"
+  },
+  "extraction": {
+    "model": "claude-opus-4-7",
+    "prompt_version": "v1",
+    "extracted_at": "2026-05-05T23:09:59.063114+00:00"
+  },
+  "temporal": {
+    "valid_from": "2026-05-05T23:09:59.008804+00:00",
+    "valid_to": null,
+    "superseded_by": null,
+    "is_current": true
+  },
+  "history": [
+    {
+      "event": "created",
+      "at": "2026-05-05T23:09:59.063114+00:00",
+      "by": "aurra-extractor",
+      "details": null
+    },
+    {
+      "event": "memory.created",
+      "at": "2026-05-05T23:10:01.774058+00:00",
+      "by": "user_3CyGtiPsbcMjBvQYnsU47r4hWKF",
+      "details": {
+        "shape": "legacy_content",
+        "topic": "people",
+        "source": "agent",
+        "tenant_id": "acme-demo"
+      }
+    }
+  ]
+}
+```
+
+### Top-level fields
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `memory_id` | UUID | Echo of the requested ID. |
+| `memory` | object | The current fact: `summary`, `decision`, `topic`. |
+| `provenance` | object | Where this memory came from. See below. |
+| `extraction` | object | Which LLM / prompt version generated it.  |
+| `temporal` | object | Current validity state. Same shape as in `/agent/memories`. |
+| `history` | array | Event log in chronological order. See event types below. |
+
+### provenance
+
+| Field | Notes |
+| --- | --- |
+| `source_type` | Top-level category (`agent`, `agent_session`, `slack`, `notion`, etc.) |
+| `channel` | Sub-channel (e.g. Slack channel name, Notion database ID) |
+| `tenant_id` | Tenant scope (if any) |
+| `workspace_id` | Reserved for multi-workspace accounts (Phase 4). |
+| `org_id` | Reserved for multi-org accounts (Phase 4). |
+| `external_id` | Your system's identifier for the source event (e.g. Slack message ts). |
+| `original_input` | The raw input that produced this memory. **Trust floor.** |
+| `captured_at` | ISO 8601 timestamp of capture (not extraction). |
+
+### extraction
+
+| Field | Notes |
+| --- | --- |
+| `model` | LLM identifier (e.g. `claude-opus-4-7`).  |
+| `prompt_version` | Aurra prompt version (e.g. `v1`). Bumps when Aurra changes extraction behavior. |
+| `extracted_at` | ISO 8601 timestamp of extraction. |
+
+### history[] events
+
+Each entry has `event`, `at`, `by`, `details`. Common event types:
+
+| Event | Meaning |
+| --- | --- |
+| `created` | Extraction completed. `by` is always `aurra-extractor`. |
+| `memory.created` | Memory row inserted into the database. `by` is the company's Clerk user ID. |
+| `memory.superseded` | This memory was superseded. `details.superseded_by` has the new UUID. |
+| `memory.expired` | This memory was superseded without a replacement. `details.valid_to` has the expiry. |
+| `memory.classified` | Level 2 auto-supersession classifier ruan. `details` has the classification result. |
+
+New event types may appear over time. Clients should accept unknown events without erroring.
+
+### Use cases
+
+- **Debate resolution** - "why does my agent think X?". provenance.original_input is always the answer.
+- **Compliance reports** - export provenance + extraction + history for any fact.
+- **Extraction regression tracking** - filter by `extraction.prompt_version` to quantify quality changes across extractor releases.
+
+### Error responses
+
+| Status | Trigger |
+| --- | --- |
+| `403` | `memory_id` exists but belongs to another account. |
+| `404` | `memory_id` does not exist. |
+| `422` | UUID format invalid. |

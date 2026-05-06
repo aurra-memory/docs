@@ -1,0 +1,125 @@
+---
+title: Settings & Plan
+description: Read and update kill-switch defaults; check plan usage and limits.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The settings endpoints control how Aurra behaves for your API key (Level 2 auto-supersession, excluded categories, confidence floor, classifier model). The plan endpoint reports usage against your quota.
+
+## GET `/agent/settings`
+
+Read the current settings for your API key.
+
+### Example
+
+```bash
+curl https://api.aurra.us/agent/settings \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+### Response (200)
+
+```json
+{
+  "auto_supersede_default": false,
+  "excluded_categories": ["health_medical", "legal_status"],
+  "min_confidence": 0.85,
+  "classifier_model": "claude-haiku-4-5-20251001"
+}
+```
+
+### Response fields
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `auto_supersede_default` | boolean | false | If true, every write runs the Level 2 auto-supersession classifier. Can be overridden per-request via `auto_supersede` on `/agent/memories`. |
+| `excluded_categories` | array | `["health_medical", "legal_status"]` | Categories that never reach the LLM classifier. Hard-coded deterministic gating. |
+| `min_confidence` | float (0-1) | 0.85 | Confidence floor. Classifier decisions below this are rejected. |
+| `classifier_model` | string | `claude-haiku-4-5-20251001` | Model used for supersession classification. Must be an Anthropic model ID. |
+
+## PATCH `/agent/settings`
+
+Update one or more settings. Omit fields you don't want to change.
+
+<Callout type="warn">
+**These are per-API-key defaults.** They apply to every write made with this key unless overridden per-request. If you're integrating Aurra into a product, consider issuing separate API keys per environment (dev/staging/prod) so you can test auto-supersession in dev before enabling it in prod.
+</Callout>
+
+### Request body
+
+All fields optional. Only fields present in the body are updated.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `auto_supersede_default` | boolean | Toggle Level 2 on/off for this key. |
+| `excluded_categories` | array | Replaces the entire list. Pass `[]` to allow all categories (not recommended). |
+| `min_confidence` | float (0-1) | Raise for stricter gating, lower for more supersessions. |
+| `classifier_model` | string | Must be an Anthropic model ID. Changing this impacts cost and latency. |
+
+### Example: enable Level 2 auto-supersession
+
+```bash
+curl -X PATCH https://api.aurra.us/agent/settings \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"auto_supersede_default": true}'
+```
+
+### Example: raise confidence floor
+
+```bash
+curl -X PATCH https://api.aurra.us/agent/settings \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"min_confidence": 0.90}'
+```
+
+### Response (200)
+
+Returns the full settings object after update (same shape as `GET`).
+
+## GET `/plan/status`
+
+Current plan tier, usage, and block status. Check this before long-running write-heavy jobs.
+
+### Example
+
+```bash
+curl https://api.aurra.us/plan/status \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+### Response (200)
+
+```json
+{
+  "org_id": "2a8bfe51-e7ed-4f6e-8cfd-c7062e2a47bf",
+  "plan_tier": "starter",
+  "plan_status": "active",
+  "writes_used": 49,
+  "writes_limit": 50000,
+  "writes_remaining": 49951,
+  "period_start": "2026-05-01T00:00:00+00:00",
+  "in_grace_period": false,
+  "blocked": false
+}
+```
+
+### Response fields
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `org_id` | UUID | Your org identifier. |
+| `plan_tier` | string | `starter` (`$29/mo`) or `pro` (`$99/mo`). |
+| `plan_status` | string | `active`, `past_due`, `canceled`. |
+| `writes_used` | integer | Writes consumed this period. |
+| `writes_limit` | integer | Period quota. |
+| `writes_remaining` | integer | `writes_limit - writes_used`. Computed server-side. |
+| `period_start` | ISO 8601 | Start of current billing period. Usage resets to 0 at every new period. |
+| `in_grace_period` | boolean | `true` if you've exceeded quota but are still receiving reads. Writes are 429. |
+| `blocked` | boolean | `true` if reads are also blocked (end of grace period without upgrade). |
+
+### Using plan status
+
+Check `plan/status` before bulk imports: if `writes_remaining` is less than your planned batch, the import will partially fail with 429s. For predictable alerting, poll every few hours and notify your team when `writes_remaining / writes_limit` drops below 0.1.

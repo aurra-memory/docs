@@ -1,0 +1,146 @@
+---
+title: Bi-temporal Memory
+description: Facts have lifespans, not just truth values. How Aurra tracks when a fact was true and when you learned it.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Most memory systems store facts as *true or false*. Aurra stores them as *true during some period*. This is the core abstraction that makes everything else in Aurra - supersession, citations, audit trails - work.
+
+## Two time axes
+
+Aurra tracks **two separate times** for every memory:
+
+| Time | Question it answers | Field |
+| --- | --- | --- |
+| **Valid time** (fact time) | When was this fact true in the real world? | `valid_from`, `valid_to` |
+| **Transaction time** (system time) | When did Aurra learn about it? | `created_at` |
+
+These are not the same. You might record today (`created_at = 2026-05-05`) that Alice started at Acme Corp last year (`valid_from = 2025-03-15`). A naive system that only stores active facts can't represent this difference.
+
+<Callout type="info">
+"*Bi-temporal" is a term borrowed from database research** (Snodgrass, 1999). It's how enterprise systems like SAP and Oracle handle financial history and regulatory compliance. Aurra applies the same idea to agent memory.
+</Callout>
+
+## Why this matters
+
+Naive memory systems (think `dict`, key-value stores, or mem0's default behavior) do this when you update a fact:
+
+```
+10/1/2026: "Alice works at Acme Corp"  <-- stored
+3/1/2026:  "Alice works at Globex"    <-- update (overwrites)
+```
+
+The previous fact is gone. You can no longer answer questions like:
+
+- **What did the agent know about Alice on Feb 15?**
+- **When did Alice change jobs?**
+- **Did the agent recommend the right person when it sent that email back in January?**
+
+In regulated industries (healthcare, finance, legal, HR), this is not an edge case - it's a requirement. An auditor needs to confirm what the system *thought* was true at the moment a decision was made.
+
+Aurra preserves both times so you can always reconstruct state.
+
+## How it works in practice
+
+Every memory row has this shape in the database:
+
+```
+id            : UUID
+decision      : "Alice works at Acme Corp"
+valid_from    : 2025-03-15T00:00:00Z      <-- when the fact became true
+valid_to      : null                      <-- null = still current
+superseded_by : null                      <-- null = not replaced
+created_at    : 2026-05-05T23:09:59Z      <-- when the row was inserted
+```
+
+When you call [`POST /memories/{memory_id}/supersede`](/docs/api-reference/supersede) to replace Alice's job:
+
+```
+[old row]  decision:  "Alice works at Acme Corp"
+           valid_from: 2025-03-15  <-- unchanged
+           valid_to:   2026-05-05  <-- NEW: when it stopped being true
+           superseded_by: UUID of new row
+
+[new row]  decision:  "Alice works at Globex"
+           valid_from: 2026-05-05  <-- when the new fact became true
+           valid_to:   null
+           superseded_by: null
+```
+
+**Everything stays.** The old row is never modified except for its `valid_to` and `superseded_by` fields.
+
+## Point-in-time queries
+
+Because both times are preserved, you can query Aurra as it would have answered at any point in the past.
+
+```bash
+curl "https://api.aurra.us/agent/memories?as_of=2026-03-01T00:00:00Z" \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+This returns every memory that was current on March 1, 2026 (where `valid_from <= as_of < valid_to` or `valid_to is null`).
+
+Use cases:
+
+- **Replay agent decisions.** If your agent recommended Alice for a role on February 15, replay that decision with the memories it had at the time.
+- **Audit responses.** "What did the system know when it processed claim X/T$ms#123?" is a single query.
+- **Debug drift.** Compare queries at two timestamps to see exactly which facts changed.
+
+## The temporal object
+
+Every memory response includes a `temporal` object for quick boolean checks:
+
+```json
+"temporal": {
+  "valid_from": "2026-05-05T23:09:59.008804+00:00",
+  "valid_to": null,
+  "superseded_by": null,
+  "is_current": true,
+  "is_expired": false,
+  "is_superseded": false
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `is_current` | `true` if this row is the active truth (not expired, not superseded). |
+| `is_expired` | `true` if `valid_to` is set without a `superseded_by` (explicit expiry, no replacement). |
+| `is_superseded` | `true` if `superseded_by` points to a newer row. |
+
+Exactly one of `is_current`, `is_expired`, `is_superseded` is true at any point.
+
+## Mental model
+
+Think of a memory as a **lease on a fact**. When you add it, the lease starts (`valid_from`). It runs indefinitely (`valid_to: null`) until either:
+
+- You explicitly expire it (supersede with `valid_to`).
+- A new fact replaces it (supersede with `superseded_by`).
+- [Level 2 auto-supersession](/docs/level-2-supersession) detects a replacement automatically.
+
+Once a lease ends, the row still exists in the database and is reachable via:
+
+- `GET /agent/memories?include_superseded=true`
+- `GET /agent/memories?as_of=<timestamp>`
+- [`GET /memories/{memory_id}/timeline`](/docs/api-reference/timeline)
+- [`GET /memories/{memory_id}/audit`](/docs/api-reference/audit)
+
+But it's excluded from the default read path (`query` and unfiltered `list`).
+
+## When to reach for this
+
+The bi-temporal design starts paying off the first time one of these happens:
+
+- A customer or auditor asks "why did your agent do X on Y date?"
+- A regulator requests a reconstruction of system state.
+- A bug ships into prod and you need to know which users had stale context when.
+- A team mate claims "if it ever knew X" - you can prove it (or prove they're wrong).
+
+If you're building a personal chatbot, you likely don't need point-in-time queries. If you're building an agent that touches regulated data, financial decisions, customer communications, or anything that could end up in court: you need this.
+
+## Next steps
+
+- [Auto-Supersession (Level 2)](/docs/level-2-supersession) - how Aurra detects and applies supersessions automatically.
+- [Timeline API](/docs/api-reference/timeline) - retrieve the full chain for any fact.
+- [Audit API](/docs/api-reference/audit) - inspect every event that affected a single memory.
+- [Supersede API](/docs/api-reference/supersede) - manually replace or expire a fact.

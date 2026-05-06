@@ -1,0 +1,15 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "---Getting Started---",
+    "index",
+    "quickstart",
+    "api-reference",
+    "---Core Features---",
+    "bi-temporal",
+    "level-2-supersession",
+    "citations",
+    "source-filtering",
+    "byo-llm"
+  ]
+}

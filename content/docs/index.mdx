@@ -1,0 +1,46 @@
+---
+title: Overview
+description: Aurra is a memory layer for AI agents — durable, citable, time-aware.
+---
+
+Aurra is a memory infrastructure layer for AI agents. It captures what your agent observes, supersedes outdated facts automatically, and returns memories with citations and timestamps.
+
+## Why Aurra exists
+
+Most "memory for AI" tools store strings and retrieve them by similarity. That works until your agent confidently tells a customer something that was true six months ago and isn't anymore — or fabricates a date that never existed.
+
+Aurra solves three problems other systems don't:
+
+- **Bi-temporal versioning.** Every fact has a `valid_from` and `valid_to`. When something changes ("I switched from Vim to Emacs"), the old fact is superseded, not deleted, with a full audit trail.
+- **Citation-grounded retrieval.** Every answer cites the exact memories it used, with similarity scores and tenant scoping.
+- **Source filtering.** Restrict retrieval to specific sources (Slack, Notion, email) so the right memory wins.
+
+## Benchmark vs Mem0
+
+We published the methodology and code at [github.com/aurra-memory/benchmarks](https://github.com/aurra-memory/benchmarks). On the [LoCoMo](https://arxiv.org/abs/2402.17753) long-term conversational memory dataset:
+
+| Metric | Aurra | Mem0 |
+| --- | --- | --- |
+| Memories with fabricated dates | **0%** | 22.95% |
+| Judge-rated useful | **42.4%** | 28.2% |
+| Judge-rated misattributed | **1.7%** | 7.2% |
+
+Reproducible — clone the repo, set your keys, run the scripts.
+
+## Where to start
+
+<Cards>
+  <Card title="Quickstart" href="/docs/quickstart" description="Install the SDK and store your first memory in 5 minutes." />
+  <Card title="API Reference" href="/docs/api-reference" description="All endpoints, request/response shapes, and error codes." />
+  <Card title="Bi-temporal Memory" href="/docs/bi-temporal" description="How supersession works and why it matters." />
+</Cards>
+
+## What Aurra is not
+
+- **Not a vector database.** Aurra uses pgvector under the hood, but the product is the extraction, supersession, and citation layer on top.
+- **Not a knowledge graph.** Memories are atomic facts with provenance, not nodes and edges.
+- **Not a chat history store.** Aurra extracts durable facts from raw input — it does not store every message.
+
+## Status
+
+Aurra is in active development. The API is stable for the endpoints documented here. Breaking changes are announced in advance via [GitHub releases](https://github.com/aurra-memory/benchmarks/releases) and email to API key holders.

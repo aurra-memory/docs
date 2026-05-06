@@ -1,0 +1,147 @@
+---
+title: BYO-LLM
+description: Use your own OpenAI, Anthropic, or custom-endpoint API key for extraction and classification. Your data never touches any third-party LLM account except your own.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Aurra runs an LLM call on every write (to extract facts from messages) and every query (to produce a citation-grounded answer). By default, those calls go through Aurra's own Anthropic account, and you pay for them in your subscription.
+
+BYO-LLM lets you swap that. Pass your own API key and model, and Aurra routes the call directly to your provider. Your data never passes through Aurra's LLM account.
+
+<Callout type="info">
+**Why use BYO-LLM.**
+- You have an existing OpenAI, Anthropic, or Azure commitment and want the spend to count.
+- You need data-residency guarantees (e.g. Europe, government tenants).
+- You're prototyping with a specific model (o-1, Opus-4, a fine-tune) and want to measure its extraction quality.
+- You're building against an internal endpoint compatible with the OpenAI or Anthropic API.
+</Callout>
+
+## Providers
+
+Aurra currently supports:
+
+| Provider | `provider` string | Typical model IDs |
+| --- | --- | --- |
+| Anthropic | `anthropic` | `claude-opus-4-7`, `claude-haiku-4-5-20251001` |
+| OpenAI | `openai` | `gpt-4o`, `gpt-4o - mini`, `o-1`, `o-1-mini` |
+| Azure OpenAI | `azure` | Your deployment name |
+| OpenAI-compatible (Together, Groq, vLLM, etc.) | `openai` + custom `base_url` | Any model the provider hosts |
+
+Google (Vertex/Gemini) and Bedrock are Phase 3 targets.
+
+## Passing BYO-LLM
+
+The `llm` field accepts an object with provider, model, key, and (optionally) base_url and extra.
+
+### Anthropic
+
+```bash
+curl -X POST https://api.aurra.us/agent/memories \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [...],
+    "llm": {
+      "provider": "anthropic",
+      "model": "claude-opus-4-7",
+      "key": "sk-ant-api03-your-key-here"
+    }}'
+```
+
+### OpenAI
+
+```bash
+curl -X POST https://api.aurra.us/agent/memories \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [...],
+    "llm": {
+      "provider": "openai",
+      "model": "gpt-4o",
+      "key": "sk-proj-your-key-here"
+    }}'
+```
+
+### Azure OpenAI
+
+```json
+{
+  "llm": {
+    "provider": "azure",
+    "model": "my-gpt4o-deployment",
+    "key": "your-azure-key",
+    "base_url": "https://your-resource.openai.azure.com",
+    "extra": { "api_version": "2024-08-01-preview" }
+  }}
+```
+
+### OpenAI-compatible (Together, Groq, vLLM, internal proxy)
+
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "model": "meta-llama/Llama-4-70b-instruct",
+    "key": "your-key",
+    "base_url": "https://api.together.xyz/v1"
+  }}
+```
+
+## Precedence
+
+The `llm` field is accepted by both `/agent/memories` (extraction) and `/agent/query` (answer generation). If you don't pass it, Aurra falls back to its default (Claude Opus 4.7 for generation, Claude Haiku 4.5 for classification).
+
+For auto-supersession classification, the model is configured separately via `classifier_model` in [settings](/docs/api-reference/settings) and must be an Anthropic model.
+
+## Data path
+
+When you pass `llm`:
+
+1.  Aurra receives your request.
+2.  Aurra constructs the extraction or query prompt.
+3.  Aurra calls **your** provider's api directly with your key.
+4.  Your provider's response comes back to Aurra.
+5.  Aurra parses and stores the result.
+
+Aurra does not log your API key beyond the duration of the request. We do not store it or expose it in responses or audit logs. The extraction object in audit shows the provider and model but never the key.
+
+<Callout type="warn">
+**Your provider's policies apply.** If you're using OpenAI, OpenAI's data-use policy applies to the call. If you're using a self-hosted endpoint, your own policies apply. Aurra does not wrap or alter the provider contract.
+</Callout>
+
+## Costs
+
+When you pass `llm`, Aurra does not charge for the LLM call - your provider does. Aurra charges for the write or query itself (against your `plan_tier` quota), but not the inference.
+
+This is usually a win above some volume. At small scale, Aurra's bundled LLM is simpler and cheaper. At large scale or when you're already committed to a provider, BYO-LLM lets you reuse the commitment.
+
+## Errors
+
+| Status | Trigger |
+| --- | --- |
+| `400` | `llm.provider` not recognized, or required field missing. |
+| `401` (or propagated) | Your key is rejected by the provider. The provider's error message is passed through in `detail`. |
+| `422` | Model ID invalid for the provider. |
+| `429` (propagated) | Your provider returned a rate limit. Retry with backoff. |
+| `503` | Your provider was unreachable. Aurra does not fall back to its bundled LLM when you pass `llm` - you explicitly chose a provider. |
+
+## When to use it
+
+Use BYO-LLM if:
+
+- You have an enertprise contract with an LLM provider and prefer to consolidate spend.
+- Your compliance team requires that particular data only reach an approved provider.
+- You're evaluating a new model's extraction quality against the default.
+- You're running against a non-public endpoint (internal proxy, vLLM deployment, azure resource).
+
+Skip it if:
+
+- You're a solo dev prototyping - Aurra's default is faster and not billed separately.
+- You don't care which model does extraction and don't want an extra provider to manage.
+
+## Next steps
+
+- [Memories API](/docs/api-reference/memories) - full `llm` field reference on `POST`.
+- [Query API](/docs/api-reference/query) - pass `llm` on queries for answer generation.
+- [Auto-Supersession](/docs/level-2-supersession) - classification model is configured via settings, not `llm`.
+- [Settings API](/docs/api-reference/settings) - `classifier_model` config.

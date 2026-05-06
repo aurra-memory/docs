@@ -1,0 +1,12 @@
+{
+  "title": "API Reference",
+  "pages": [
+    "index",
+    "memories",
+    "query",
+    "supersede",
+    "timeline",
+    "audit",
+    "settings"
+  ]
+}

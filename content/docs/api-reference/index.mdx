@@ -1,0 +1,105 @@
+---
+title: API Reference
+description: Base URL, authentication, error codes, and conventions used across every Aurra endpoint.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The Aurra API is a JSON over HTTPS service. Every endpoint is REST-shaped and authenticated with a single bearer token.
+
+## Base URL
+
+```
+https://api.aurra.us
+```
+
+All requests use HTTPS. HTTP requests are redirected.
+
+<Callout type="info">
+**During Phase 1**, `api.aurra.us` is a CNAME alias for the production Railway deployment. You may also call the upstream URL directly for debugging: `https://aurra-production-ace3.up.railway.app`. The contracts are identical.
+</Callout>
+
+## Authentication
+
+Every request must include an `Authorization` header with your API key:
+
+```
+Authorization: Bearer aurra_your_key_here
+```
+
+API keys start with the `aurra_` prefix and are created in your dashboard at [app.aurra.us](https://app.aurra.us). You can have multiple keys per account; they share the same data and permissions.
+
+Requests without a valid `Authorization` header return `401 Unauthorized`.
+
+```bash
+$ curl https://api.aurra.us/agent/memories
+{"detail":"Not authenticated"}
+```
+
+## Response format
+
+Successful responses return `200 OK` with a JSON body. The shape differs per endpoint. Common response fields you will see across multiple endpoints:
+
+- `company_id` - The Clerk user ID that owns this data
+- `tenant_id` - The tenant scope for the request. `null` means default tenant
+- `valid_from` - ISO 8601 timestamp when the fact became true
+- `valid_to` - ISO 8601 timestamp when it stopped being true. `null` means still current
+- `superseded_by` - If non-null, the ID of the memory that replaced this one
+
+Timestamps are always UTC ISO 8601 with timezone.
+
+## Errors
+
+Errors return a non-2xx status with a JSON body containing a `detail` field.
+
+| Status | Meaning |
+| --- | --- |
+| `400 Bad Request` | Malformed JSON or invalid field types. |
+| `401 Unauthorized` | Missing or invalid `Authorization` header. |
+| `403 Forbidden` | Authenticated but the resource belongs to another account. |
+| `404 Not Found` | Resource does not exist. |
+| `422 Unprocessable Entity` | Required field missing or wrong type. |
+| `429 Too Many Requests` | Rate-limited. Retry after `Retry-After` header value. |
+| `500 Internal Server Error` | Server bug. Report via support@aurra.us. |
+| `503 Service Unavailable` | Upstream dependency temporarily unreachable. Retry with backoff. |
+
+## Rate limits
+
+Rate limits are enforced per API key. Limits depend on your plan. Check current usage with [`GET /plan/status`](/docs/api-reference/settings).
+
+```json
+{
+  "plan_tier": "starter",
+  "writes_used": 49,
+  "writes_limit": 50000,
+  "writes_remaining": 49951,
+  "in_grace_period": false,
+  "blocked": false
+}
+```
+
+## Tenant scoping
+
+Every memory belongs to a `tenant_id`. Pass `tenant_id` on writes and queries to scope data within your account - useful for separating per-customer, per-project, or per-environment data.
+
+If you do not pass `tenant_id`, the request operates on the default tenant. **Memories written without a tenant cannot later be moved into a tenant.**
+
+## SDKs
+
+- **Python:** `pip install aurra`
+- **JavaScript / TypeScript:** `npm install aurra`
+
+<Callout type="warn">
+**SDK 0.4.0 (Python) and 0.3.0 (JS) ship Saturday, May 9, 2026.** Until then, use direct HTTP calls for citation-grounded query, source filtering, and BYO-LLM features.
+</Callout>
+
+## Endpoints in this reference
+
+<Cards>
+  <Card title="Memories" href="/docs/api-reference/memories" description="POST, GET, and DELETE memories." />
+  <Card title="Query" href="/docs/api-reference/query" description="Citation-grounded retrieval with source filtering." />
+  <Card title="Supersede" href="/docs/api-reference/supersede" description="Manual Level 1 supersession." />
+  <Card title="Timeline" href="/docs/api-reference/timeline" description="Chronological history of a memory chain." />
+  <Card title="Audit" href="/docs/api-reference/audit" description="Provenance, extraction, and event history." />
+  <Card title="Settings & Plan" href="/docs/api-reference/settings" description="Kill-switch defaults and plan usage." />
+</Cards>

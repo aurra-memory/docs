@@ -1,0 +1,280 @@
+---
+title: Memories
+description: Create, list, and delete memories.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Memories are the core resource in Aurra. Each memory is an atomic fact with provenance, a timestamp, and a tenant scope.
+
+## POST /agent/memories
+
+Create one or more memories. Aurra supports two write modes:
+
+- **Content mode** - you pass a single `content` string. Aurra stores it as-is, no extraction.
+- **Messages mode** - you pass a `messages` array (OpenAI/Anthropic chat shape). Aurra extracts 0 or more atomic facts via LLM and stores each as a separate memory.
+
+<Callout type="warn">
+**Extraction is aggressive about skipping casual content.** Conversations dominated by greetings, small talk, or ambiguous references may return `extracted_count: 0` even when facts are present. If you need reliable extraction, phrase input as explicit statements (e.g. "Remember this: X is Y") or use content mode.
+</Callout>
+
+### Request body
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `content` | string | One of `content` or `messages` | Raw fact. Stored as-is (no extraction). |
+| `messages` | array | One of `content` or `messages` | Chat message array. Aurra extracts facts via LLM. |
+| `topic` | string | No (default `"General"`) | Category label for content mode. Ignored in messages mode. |
+| `importance` | string | No (default `"medium"`) | `"low"`, `"medium"`, or `"high"`. |
+| `source` | string | No (default `"agent"`) | Source label for filtering later. Convention: `"agent"`, `"slack"`, `"notion"`, `"email"`, `"agent_session"`. |
+| `tenant_id` | string | No | Scope to a tenant. `null` means default tenant. |
+| `session_id` | string | No (messages mode only) | Links multiple extractions to the same conversation. |
+| `auto_supersede` | boolean | No (default from settings) | Per-request override for Level 2 auto-supersession. |
+| `llm` | object | No | BYO-LLM. Overrides the default extraction provider. See [BYO-LLM](/docs/byo-llm). |
+
+### Content mode example
+
+<Tabs items={["cURL", "Python", "JavaScript"]}>
+
+<Tab value="cURL">
+```bash
+curl -X POST https://api.aurra.us/agent/memories \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Alice is a senior engineer at Acme Corp.",
+    "topic": "people",
+    "importance": "high",
+    "source": "agent",
+    "tenant_id": "acme-demo"
+  }'
+```
+</Tab>
+
+<Tab value="Python">
+```python
+result = client.memories.add(
+    content="Alice is a senior engineer at Acme Corp.",
+    topic="people",
+    importance="high",
+    source="agent",
+    tenant_id="acme-demo",
+)
+```
+</Tab>
+
+<Tab value="JavaScript">
+```javascript
+const result = await client.memories.add({
+  content: "Alice is a senior engineer at Acme Corp.",
+  topic: "people",
+  importance: "high",
+  source: "agent",
+  tenantId: "acme-demo",
+});
+```
+</Tab>
+
+</Tabs>
+
+**Response (200):**
+
+```json
+{
+  "status": "saved",
+  "memory_id": "ba01899b-6294-4d53-8c04-2dd651e9500d",
+  "company_id": "user_3CyGtiPsbcMjBvQYnsU47r4hWKF",
+  "tenant_id": "acme-demo",
+  "auto_supersede": {
+    "ran": false,
+    "skipped_reason": "auto_supersede disabled",
+    "candidates_examined": 0,
+    "supersession": null
+  }
+}
+```
+
+In content mode, you get exactly one `memory_id` back.
+
+### Messages mode example
+
+<Tabs items={["cURL", "Python", "JavaScript"]}>
+
+<Tab value="cURL">
+```bash
+curl -X POST https://api.aurra.us/agent/memories \
+  -H "Authorization: Bearer $AURRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "messages": [
+    {"role": "user", "content": "Remember this fact: My name is Alice Chen, I work as a senior backend engineer at Acme Corp."},
+    {"role": "assistant", "content": "Got it, I will remember that."}
+  ], "tenant_id": "acme-demo", "session_id": "onboarding-1" }'
+```
+</Tab>
+
+<Tab value="Python">
+```python
+result = client.memories.add(
+    messages=[
+        {"role": "user", "content": "Remember this fact: My name is Alice Chen, I work as a senior backend engineer at Acme Corp."},
+        {"role": "assistant", "content": "Got it, I will remember that."},
+    ],
+    tenant_id="acme-demo",
+    session_id="onboarding-1",
+)
+```
+</Tab>
+
+<Tab value="JavaScript">
+```javascript
+const result = await client.memories.add({
+  messages: [
+    { role: "user", content: "Remember this fact: My name is Alice Chen, I work as a senior backend engineer at Acme Corp." },
+    { role: "assistant", content: "Got it, I will remember that." },
+  ],
+  tenantId: "acme-demo",
+  sessionId: "onboarding-1",
+});
+```
+</Tab>
+
+</Tabs>
+
+**Response (200):**
+
+```json
+{
+  "status": "extracted",
+  "company_id": "user_3CyGtiPsbcMjBvQYnsU47r4hWKF",
+  "tenant_id": "acme-demo",
+  "extracted_count": 4,
+  "saved_count": 4,
+  "memory_ids": [
+    "e626c0e4-83c7-4b5f-adfa-fdb9300b2e33",
+    "60995468-49d0-487a-ba35-cb549da57808",
+    "61af50b0-a920-485e-9e9a-4229f540ea70",
+    "181ed93f-8058-4fb7-a12f-130297bb28e49"
+  ],
+  "extraction": {
+    "provider": "anthropic",
+    "model": "claude-opus-4-7",
+    "byo_llm": false
+  },
+  "auto_supersede": [
+    { "memory_id": "e626c0e4...", "ran": false, "skipped_reason": "auto_supersede disabled" }
+  ]
+}
+```
+
+In messages mode, `extracted_count` tells you how many atomic facts the LLM found. Each gets its own entry in `memory_ids`.
+
+<Callout type="info">
+**Extraction is asynchronous** but completes before the response returns. On success, every ID in `memory_ids` is already queryable via `/agent/query`.
+</Callout>
+
+---
+
+## GET /agent/memories
+
+List memories for your account, with optional filters.
+
+### Query parameters
+
+| Param | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `tenant_id` | string | null | Filter to a specific tenant. |
+| `source` | string | null | Filter to one source (e.g. `slack`, `notion`, `agent`, `agent_session`). |
+| `include_superseded` | boolean | false | If true, also return memories with `temporal.is_superseded == true`. |
+| `as_of` | ISO 8601 timestamp | null | Point-in-time query: return memories valid at this moment. |
+| `limit` | integer | 100 | Max results per response. |
+
+### Example
+
+```bash
+curl "https://api.aurra.us/agent/memories?tenant_id=acme-demo&source=agent&limit=10" \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+**Response (200):**
+
+```json
+{
+  "company_id": "user_3CyGtiPsbcMjBvQYnsU47r4hWKF",
+  "tenant_id": "acme-demo",
+  "as_of": null,
+  "include_superseded": false,
+  "source": "agent",
+  "count": 1,
+  "superseded_count": 0,
+  "memories": [
+    {
+      "id": "ba01899b-6294-4d53-8c04-2dd651e9500d",
+      "summary": "Alice is a senior engineer at Acme Corp.",
+      "decision": "Alice is a senior engineer at Acme Corp.",
+      "topic": "people",
+      "importance": "high",
+      "source": "agent",
+      "created_at": "2026-05-05T23:09:59.063114+00:00",
+      "valid_from": "2026-05-05T23:09:59.008804+00:00",
+      "valid_to": null,
+      "superseded_by": null,
+      "source_citation": {
+        "type": "agent",
+        "channel": "agent",
+        "captured_at": "2026-05-05T23:09:59.063114+00:00",
+        "original_message": "Alice is a senior engineer at Acme Corp."
+      },
+      "temporal": {
+        "valid_from": "2026-05-05T23:09:59.008804+00:00",
+        "valid_to": null,
+        "superseded_by": null,
+        "is_current": true,
+        "is_expired": false,
+        "is_superseded": false
+      },
+      "tenant_id": "acme-demo"
+    }
+  ]
+}
+```
+
+Each memory includes a `temporal` object for quick boolean checks (`is_current`, `is_superseded`, `is_expired`) and a `source_citation` object with the original capture context.
+
+---
+
+## DELETE /agent/memories
+
+Delete all memories for your account, optionally scoped to a single tenant.
+
+<Callout type="error">
+**This is a hard delete.** Memories removed via `DELETE` are gone forever - no audit entry, no supersession record, no recovery. If you need to preserve history, use [supersesion](/docs/api-reference/supersede) instead.
+</Callout>
+
+<Callout type="warn">
+**There is currently no single-memory delete.** `DELETE /agent/memories` is always bulk. Always pass `tenant_id` unless you really intend to wipe everything.
+</Callout>
+
+### Query parameters
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `tenant_id` | string | No (recommended) | If set, delete only memories with this tenant_id. If omitted, **all** memories for the account are deleted. |
+
+### Example
+
+```bash
+curl -X DELETE "https://api.aurra.us/agent/memories?tenant_id=acme-demo" \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+**Response (200):**
+
+```json
+{
+  "status": "deleted",
+  "company_id": "user_3CyGtiPsbcMjBvQYnsU47r4hWKF",
+  "tenant_id": "acme-demo",
+  "deleted_count": 5
+}
+```

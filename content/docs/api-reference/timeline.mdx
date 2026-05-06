@@ -1,0 +1,106 @@
+---
+title: Timeline
+description: Chronological history of a memory chain (current + superseded versions).
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The timeline endpoint returns every version of a memory chain, ordered from oldest to newest. Use it to reconstruct how a fact changed over time.
+
+<Callout type="info">
+**A chain is a sequence of memories connected by `superseded_by` pointers.** Pass any `memory_id` in the chain (oldest, newest, or anything in between) and Aurra returns the entire timeline.
+</Callout>
+
+## GET `/memories/{memory_id}/timeline`
+
+Get the full history of a memory chain.
+
+### Path parameters
+
+| Param | Type | Notes |
+| --- | --- | --- |
+| `memory_id` | UUID | Any memory in the chain. Aurra will walk forwards and backwards from here to assemble the full timeline. |
+
+### Example
+
+```bash
+curl https://api.aurra.us/memories/ba01899b-6294-4d53-8c04-2dd651e9500d/timeline \
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+### Response (200)
+
+```json
+{
+  "memory_id": "ba01899b-6294-4d53-8c04-2dd651e9500d",
+  "company_id": "user_3CyGtiPsbcMjBvQYnsU47r4hWKF",
+  "chain_length": 1,
+  "timeline": [
+    {
+      "id": "ba01899b-6294-4d53-8c04-2dd651e9500d",
+      "summary": "Alice is a senior engineer at Acme Corp.",
+      "decision": "Alice is a senior engineer at Acme Corp.",
+      "topic": "people",
+      "importance": "high",
+      "source": "agent",
+      "created_at": "2026-05-05T23:09:59.063114+00:00",
+      "valid_from": "2026-05-05T23:09:59.008804+00:00",
+      "valid_to": null,
+      "superseded_by": null,
+      "tenant_id": "acme-demo",
+      "source_citation": { "...": "..." },
+      "temporal": {
+        "valid_from": "2026-05-05T23:09:59.008804+00:00",
+        "valid_to": null,
+        "superseded_by": null,
+        "is_current": true,
+        "is_expired": false,
+        "is_superseded": false
+      }
+    }
+  ]
+}
+```
+
+### Response fields
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `memory_id` | UUID | The ID you requested (not necessarily the current head of the chain). |
+| `company_id` | string | Your Clerk user ID. |
+| `chain_length` | integer | Total number of versions in the chain (1 if the fact has never been superseded). |
+| `timeline` | array | Full memory objects, ordered by `valid_from` (oldest first). |
+
+### Reading the chain
+
+In a chain with `chain_length > 1`, exactly one memory has `temporal.is_current: true` and `valid_to: null`. All prior versions have a `valid_to` timestamp and a `superseded_by` pointer to the next version.
+
+Example chain after superseding Alice's job details:
+
+```
+[v1] "senior engineer at Acme Corp"
+      valid_from: 2026-05-05T23:09:59
+      valid_to  : 2026-05-05T23:11:42  --> superseded_by v2
+      is_current: false
+
+[v2] "staff engineer at Globex"
+      valid_from: 2026-05-05T23:11:42
+      valid_to  : null
+      is_current: true
+```
+
+### Use cases
+
+- **Audit ui** - show users how a fact changed ("Alice's title was 'senior engineer' until May 5, then 'staff engineer'").
+- **Compliance** - prove what your agent knew at any point in the past.
+- **Debugging** - replay an agent's decision against the memory state at the time it was made.
+
+For a richer view that includes extraction metadata and event history (created, superseded, classified, etc.), use [`GET /memories/{memory_id}/audit`](/docs/api-reference/audit).
+
+### Error responses
+
+| Status | Trigger |
+| --- | --- |
+| `403` | `memory_id` exists but belongs to another account. |
+| `404` | `memory_id` does not exist. |
+| `422` | UUID format invalid. |

@@ -1,0 +1,55 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/preset.css';
+@import 'fumadocs-ui/css/neutral.css';
+@source '../../node_modules/fumadocs-ui/dist/**/*.js';
+
+/* =====================================================================
+   Aurra brand tokens — source of truth for the brand
+   Mirror these on aurra.us during the Phase 2 frontend rewrite.
+   #a78bfa = hsl(258, 90%, 76%)
+   #7c5cfc = hsl(254, 97%, 67%)
+   #0a0a0a = hsl(0, 0%, 4%)
+   #ededed = hsl(0, 0%, 93%)
+   ===================================================================== */
+
+@theme {
+  --aurra-purple: hsl(258, 90%, 76%);
+  --aurra-purple-deep: hsl(254, 97%, 67%);
+}
+
+/* Light mode: keep neutral white background, purple only as accent */
+@theme {
+  --color-fd-primary: hsl(254, 97%, 67%);
+  --color-fd-primary-foreground: hsl(0, 0%, 98%);
+  --color-fd-ring: hsl(254, 97%, 67%);
+  --color-fd-accent: hsla(258, 90%, 76%, 0.12);
+  --color-fd-accent-foreground: hsl(254, 97%, 30%);
+}
+
+/* Dark mode: matches aurra.us hero exactly */
+.dark {
+  --color-fd-background: hsl(0, 0%, 4%);
+  --color-fd-foreground: hsl(0, 0%, 93%);
+  --color-fd-card: hsl(0, 0%, 6%);
+  --color-fd-card-foreground: hsl(0, 0%, 93%);
+  --color-fd-popover: hsl(0, 0%, 6%);
+  --color-fd-popover-foreground: hsl(0, 0%, 93%);
+  --color-fd-muted: hsl(0, 0%, 10%);
+  --color-fd-muted-foreground: hsl(0, 0%, 63%);
+  --color-fd-border: hsla(258, 50%, 50%, 0.18);
+  --color-fd-primary: hsl(258, 90%, 76%);
+  --color-fd-primary-foreground: hsl(0, 0%, 9%);
+  --color-fd-ring: hsl(258, 90%, 76%);
+  --color-fd-accent: hsla(258, 90%, 76%, 0.16);
+  --color-fd-accent-foreground: hsl(258, 90%, 86%);
+  --color-fd-secondary: hsl(0, 0%, 10%);
+  --color-fd-secondary-foreground: hsl(0, 0%, 93%);
+}
+
+/* Italic emphasis matches the aurra.us "tells the truth" treatment */
+.prose em,
+article em {
+  font-family: var(--font-serif), Georgia, serif;
+  font-style: italic;
+  color: var(--aurra-purple);
+}
