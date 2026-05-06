@@ -42,10 +42,9 @@ When auto-supersession is enabled and you write a new memory, Aurra runs this pi
 2.  Embed new fact and query for similar memories       (top k by cosine)
 3.  Gate : skip if topic is in excluded_categories      (enforced before LLM)
 4.  Classify (lightweight Claude Haiku call):
-     - "new fact" -> new row, no supersession
-     - "contradicts existing #17" -> supersede #17
-     - "supplements existing #17" -> new row alongside #17
-     - "duplicate of existing #17" -> reject write
+     - "supersedes existing #17" -> supersede #17
+     - "refines existing #17" -> system policy: keep both rows for now
+     - "independent" -> new row, no supersession
 5.  Enforce : decision must have confidence >= min_confidence   (default 0.85)
 6.  Apply : write new row, if superseding also flip old row's valid_to/superseded_by
 7.  Record : audit event with classifier reasoning, confidence, and model ID
@@ -105,7 +104,7 @@ Every write returns an `auto_supersede` block so you can see what happened:
   "candidates_examined": 3,
   "supersession": {
     "superseded_id": "ba01899b-6294-4d53-8c04-2dd651e9500d",
-    "classifier": "contradicts",
+    "verdict": "supersedes",
     "confidence": 0.92,
     "reason": "The new fact directly replaces the editor preference in memory #01899b.",
     "model": "claude-haiku-4-5-20251001"
@@ -119,9 +118,20 @@ Every write returns an `auto_supersede` block so you can see what happened:
 | `skipped_reason` | Human-readable reason when `ran: false`. |
 | `candidates_examined` | How many existing memories were against for contradiction. |
 | `supersession` | `null` if no supersession happened. Object if it did. |
-| `supersession.classifier` | One of `contradicts`, `supplements`, `duplicate`, `new_fact`. |
+| `supersession.verdict` | One of `supersedes`, `refines`, or `independent`. (Dedup of exact-text duplicates happens earlier in the write path; see [duplicate handling](#duplicate-handling) below.) |
 | `supersession.confidence` | 0-1 float. Aurra rejects anything below `min_confidence`. |
-| `supersession.reason` | The classifier's explanation. Show this to users in audit UIs. |
+| `supersession.reasoning` | The classifier's explanation. Show this to users in audit UIs. |
+
+## Duplicate handling
+
+Aurra also has a separate, simpler dedup pass that runs **before** the classifier on every write:
+
+- **Scope:** dedup is per-tenant. Memories from different tenants never collide.
+- **Key for Slack messages:** `(company_id, tenant_id, slack_ts)` - exact-match.
+- **Key for all other writes:** `(company_id, tenant_id, source, channel)` plus the first 100 characters of the `decision` text.
+- **Behavior:** if the dedup key matches an existing row, the write is silently skipped (returns no new memory id; check `extracted_count` vs `saved_count` in the response to detect).
+
+This dedup is **fingerprint-based, not semantic**. Two memories with similar but differently-worded decisions ("user loves pickleball" vs "user enjoys pickleball") will both save. Use Level 2 supersession for semantic-aware merging.
 
 ## Cost and latency
 
