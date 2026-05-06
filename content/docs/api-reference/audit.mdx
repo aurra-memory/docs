@@ -123,7 +123,7 @@ Each entry has `event`, `at`, `by`, `details`. Common event types:
 | `memory.created` | Memory row inserted into the database. `by` is the company's Clerk user ID. |
 | `memory.superseded` | This memory was superseded. `details.superseded_by` has the new UUID. |
 | `memory.expired` | This memory was superseded without a replacement. `details.valid_to` has the expiry. |
-| `memory.classified` | Level 2 auto-supersession classifier ruan. `details` has the classification result. |
+| `memory.classified` | Level 2 auto-supersession classifier ran against this memory. `details` has `verdict` (`supersedes`/`refines`/`independent`), `confidence`, `model`, `new_memory_id` (the new memory triggering the check), and `applied` (whether the verdict actually triggered supersession). |
 
 New event types may appear over time. Clients should accept unknown events without erroring.
 

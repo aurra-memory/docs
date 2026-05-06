@@ -24,7 +24,7 @@ Mark a specific memory as superseded.
 
 ### Request body
 
-Exactly one of `superseded_by` or `valid_to` must be provided.
+At least one of `superseded_by` or `valid_to` must be provided. Both may be supplied together (e.g. to supersede with a backdated `valid_to`).
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -95,7 +95,7 @@ After supersession:
 
 | Status | Trigger |
 | --- | --- |
-| `400` | Neither `superseded_by` nor `valid_to` provided, or both provided. |
+| `400` | Neither `superseded_by` nor `valid_to` provided. (Supplying both is allowed — they apply together.) |
 | `403` | `memory_id` exists but belongs to another account. |
 | `404` | `memory_id` does not exist. |
 | `422` | UUID format invalid or timestamp not ISO 8601. |
