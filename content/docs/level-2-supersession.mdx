@@ -135,7 +135,7 @@ This dedup is **fingerprint-based, not semantic**. Two memories with similar but
 
 ## Cost and latency
 
-Auto-supersession adds one Claude Haiku call per write (typically under 200ms, under $0.0001). You pay this cost only on writes that reach the classifier - excluded categories and disabled keys add zero overhead.
+Auto-supersession runs on every write that passes the category gate. The classifier itself (one Claude Haiku call) typically takes 1-3 seconds. Including embedding generation, semantic search, and database writes, **the full auto-supersession flow is typically 5-15 seconds end-to-end** — usually 5-10 seconds when no similar memories exist (classifier doesn't run), longer when one or more candidates need classification. Per Haiku call costs under $0.0001. Excluded categories and disabled keys add zero overhead.
 
 Change the classifier model via `classifier_model` in settings if you need to swap for a cheaper or more accurate one. Must be an Anthropic model ID (external provider swap goes through [BYO-LLM](/docs/byo-llm)).
 
