@@ -8,6 +8,18 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 Memories are the core resource in Aurra. Each memory is an atomic fact with provenance, a timestamp, and a tenant scope.
 
+
+<Callout type="info">
+**Migration from v0.x — `importance` is now `importance_score`.**
+
+The `importance` string field (`"low"`/`"medium"`/`"high"`) is deprecated and will
+be removed in v1.0. Use `importance_score` (integer 1-10) instead.
+
+Mapping for existing code: `high=8`, `medium=5`, `low=2`. SDKs (Python >= 0.5.0,
+JS >= 0.4.0) accept the legacy field but emit a deprecation warning. Direct API
+callers can pass either field; the server prefers `importance_score`.
+</Callout>
+
 ## POST /agent/memories
 
 Create one or more memories. Aurra supports two write modes:
@@ -26,7 +38,7 @@ Create one or more memories. Aurra supports two write modes:
 | `content` | string | One of `content` or `messages` | Raw fact. Stored as-is (no extraction). |
 | `messages` | array | One of `content` or `messages` | Chat message array. Aurra extracts facts via LLM. |
 | `topic` | string | No (default `"General"`) | Category label for content mode. Ignored in messages mode. |
-| `importance` | string | No (default `"medium"`) | `"low"`, `"medium"`, or `"high"`. |
+| `importance_score` | integer (1-10) | No (default `5`) | How important this memory is for future recall. 1=trivial, 5=normal, 8=key identity, 10=critical/urgent. Server validates the 1-10 range. |
 | `source` | string | No (default `"agent"`) | Source label for filtering later. Convention: `"agent"`, `"slack"`, `"notion"`, `"email"`, `"agent_session"`. |
 | `tenant_id` | string | No | Scope to a tenant. `null` means default tenant. |
 | `session_id` | string | No (messages mode only) | Links multiple extractions to the same conversation. |
@@ -45,7 +57,7 @@ curl -X POST https://api.aurra.us/agent/memories \
   -d '{
     "content": "Alice is a senior engineer at Acme Corp.",
     "topic": "people",
-    "importance": "high",
+    "importance_score": 8,
     "source": "agent",
     "tenant_id": "acme-demo"
   }'
@@ -57,7 +69,7 @@ curl -X POST https://api.aurra.us/agent/memories \
 result = client.memories.add(
     content="Alice is a senior engineer at Acme Corp.",
     topic="people",
-    importance="high",
+    importance_score=8,
     source="agent",
     tenant_id="acme-demo",
 )
@@ -69,7 +81,7 @@ result = client.memories.add(
 const result = await client.memories.add({
   content: "Alice is a senior engineer at Acme Corp.",
   topic: "people",
-  importance: "high",
+  importanceScore: 8,
   source: "agent",
   tenantId: "acme-demo",
 });
@@ -213,7 +225,7 @@ curl "https://api.aurra.us/agent/memories?tenant_id=acme-demo&source=agent&limit
       "summary": "Alice is a senior engineer at Acme Corp.",
       "decision": "Alice is a senior engineer at Acme Corp.",
       "topic": "people",
-      "importance": "high",
+      "importance_score": 8,
       "source": "agent",
       "created_at": "2026-05-05T23:09:59.063114+00:00",
       "valid_from": "2026-05-05T23:09:59.008804+00:00",
