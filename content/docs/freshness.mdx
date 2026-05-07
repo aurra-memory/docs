@@ -1,0 +1,142 @@
+---
+title: Freshness Score
+description: How recent is this memory? Aurra computes a per-memory freshness score on every read, configurable per API key.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Every memory in Aurra carries a **freshness score** in retrieval responses — a number between `0.0` and `1.0` that decays exponentially with age. It tells you, at a glance, how recent the underlying fact is.
+
+This is computed at read time, never stored. You don't need to do anything to enable it — it's always there.
+
+## What it looks like
+
+Both `/agent/memories` and `/agent/query` include `freshness` on every memory in the response:
+
+```json
+{
+  "memories": [
+    {
+      "id": "ab7e0d40-...",
+      "decision": "User prefers async communication",
+      "created_at": "2026-05-01T12:00:00Z",
+      "freshness": 0.842,
+      ...
+    }
+  ]
+}
+```
+
+## How it's computed
+
+Exponential decay with a configurable half-life:
+
+```
+freshness = 0.5 ^ (age_days / half_life_days)
+```
+
+- A memory created **today** → freshness ≈ `1.0`
+- A memory at **one half-life** old → freshness = `0.5`
+- A memory at **three half-lives** old → freshness ≈ `0.125`
+
+Special cases:
+
+- Superseded or expired memories → freshness = `0.0` (the fact is no longer current)
+- Future timestamps (clock skew) → freshness clamped to `1.0`
+- Missing or malformed timestamps → freshness = `0.5` (neutral fallback)
+
+## Configuring the half-life
+
+Default half-life is **30 days**, configurable per API key via `freshness_half_life_days` in settings. Range: `1` to `3650` (1 day to 10 years).
+
+```bash
+# Set half-life to 60 days (slower decay — memories stay 'fresh' longer)
+curl -X PATCH 'https://api.aurra.us/agent/settings' \
+  -H 'Authorization: Bearer $AURRA_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"freshness_half_life_days": 60}'
+```
+
+```bash
+# Confirm
+curl 'https://api.aurra.us/agent/settings' \
+  -H 'Authorization: Bearer $AURRA_API_KEY'
+# {
+#   ...
+#   "freshness_half_life_days": 60.0
+# }
+```
+
+Out-of-range values are rejected with HTTP 400 + a hint:
+
+```json
+{
+  "status": "error",
+  "error": "validation failed",
+  "hint": "freshness_half_life_days must be a number between 1 and 3650."
+}
+```
+
+## Choosing a half-life
+
+| Use case | Suggested half-life |
+| --- | --- |
+| Customer-support agent — recent context matters most | 7-14 days |
+| Personal assistant — preferences are durable | 30-90 days |
+| Long-term project memory — facts are mostly stable | 90-365 days |
+| Identity / employer / location facts that rarely change | 365+ days |
+
+The score is purely advisory — Aurra doesn't drop or hide memories based on freshness. It's information for your code (or your LLM prompt) to use.
+
+<Callout type='info'>
+**When to actually look at freshness:** rank retrieval results, weight LLM prompt context, surface decay warnings in your UI, schedule re-confirmation prompts. Don't filter on it — that loses information.
+</Callout>
+
+## SDK examples
+
+### Python (aurra >= 0.5.0)
+
+```python
+from aurra import Aurra
+
+aurra = Aurra(api_key='aurra_...')
+
+# Update half-life
+aurra.settings.update(freshness_half_life_days=14)
+
+# Read it back
+settings = aurra.settings.get()
+print(settings.freshness_half_life_days)  # 14.0
+
+# Use it: rank memories by freshness
+memories = aurra.memories.list()
+ranked = sorted(memories, key=lambda m: m['freshness'], reverse=True)
+for m in ranked[:3]:
+    print(f"{m['freshness']:.2f}: {m['decision']}")
+```
+
+### JavaScript (aurra >= 0.4.0)
+
+```typescript
+import { Aurra } from 'aurra';
+
+const aurra = new Aurra({ apiKey: 'aurra_...' });
+
+await aurra.settings.update({ freshnessHalfLifeDays: 14 });
+
+const memories = await aurra.memories.list();
+const ranked = memories.memories.sort((a, b) => b.freshness - a.freshness);
+```
+
+## What it doesn't do
+
+- **Doesn't filter retrieval.** Even very stale memories appear in results — that's by design. You make the call about what to do with them.
+- **Doesn't affect ranking automatically.** Semantic search ranks by similarity, not freshness. If you want recency-weighted retrieval, do it client-side (or open an issue — we may add a `boost_recency` flag).
+- **Doesn't track frequency-of-access.** If you need 'how often has this memory been retrieved?', see the [Audit API](/docs/api-reference/audit).
+- **Doesn't replace bi-temporal versioning.** Freshness measures age; bi-temporal measures *what was true and when*. Different concerns.
+
+## Next steps
+
+- [Bi-temporal Memory](/docs/bi-temporal) — the time axes that govern *truth*, separately from *recency*.
+- [Importance Score](/docs/importance-score) — orthogonal signal: how *important* is the fact, regardless of age?
+- [Settings API](/docs/api-reference/settings) — full surface for per-API-key configuration including `freshness_half_life_days`.

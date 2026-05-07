@@ -1,0 +1,186 @@
+---
+title: Transaction Time (Level 3)
+description: Query what the system BELIEVED at any point in the past, not just what was true. The audit-trail dimension of bi-temporal memory.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+[Bi-temporal](/docs/bi-temporal) introduced the two time axes Aurra tracks: **valid time** (when a fact was true in the world) and **transaction time** (when the system believed it). Level 3 — *transaction-time querying* — lets you ask the second question directly.
+
+## The question Level 3 answers
+
+> "What did our system know on April 15, 2026?"
+
+A naive memory store can only show you the *current* state. A Level 1 store ([bi-temporal.mdx](/docs/bi-temporal)) lets you replay state along the world-truth axis (`as_of`). Level 3 lets you replay along the system-knowledge axis (`transaction_as_of`).
+
+These are not the same. Consider:
+
+```
+March 1   : Alice changes jobs from Acme to Globex
+April 15  : Aurra still has 'Alice works at Acme' — your system is unaware
+April 20  : You finally tell Aurra about the change. supersede() runs.
+```
+
+If you ask 'what was true on March 1?' — Aurra (Level 1) can now correctly say *Globex*, because supersession added a new row with `valid_from = March 1`.
+
+But if you ask 'what did the system *believe* on April 15?' — Aurra (Level 3) tells you *Acme*. Because that's what your code was acting on at the time. **For audit and compliance, this distinction is the whole point.**
+
+<Callout type='info'>
+**Schema** — Level 3 adds two new columns to every memory row:
+`transaction_time_start` (when the system started believing) and
+`transaction_time_end` (when the system stopped believing, NULL if still believed).
+The `is_known_current` boolean in the `temporal` block is the convenience flag.
+</Callout>
+
+## The full bi-temporal 2x2
+
+Combining `as_of` (Level 1) and `transaction_as_of` (Level 3) gives four query modes:
+
+| `as_of` | `transaction_as_of` | Returns |
+| --- | --- | --- |
+| absent | absent | **Current truth** — what the system currently believes is currently true. The default. |
+| present | absent | **Valid-time travel** — what was true in the world at T, using current system knowledge. |
+| absent | present | **Transaction-time travel** — what the system believed at T, regardless of validity. |
+| present | present | **Full bi-temporal** — 'as of T1 (system time), what did we think was true at T2 (world time)?' The canonical audit query. |
+
+## API surface
+
+### List endpoint
+
+```bash
+# Transaction-time travel: what did the system believe on April 15?
+curl 'https://api.aurra.us/agent/memories?transaction_as_of=2026-04-15T00:00:00Z' \
+  -H 'Authorization: Bearer $AURRA_API_KEY'
+
+# Full bi-temporal: as of April 30 (system time), what did we think was
+# true on March 1 (world time)?
+curl 'https://api.aurra.us/agent/memories?as_of=2026-03-01T00:00:00Z&transaction_as_of=2026-04-30T00:00:00Z' \
+  -H 'Authorization: Bearer $AURRA_API_KEY'
+```
+
+The response echoes both params back so you can confirm what filter was applied:
+
+```json
+{
+  "company_id": "user_...",
+  "as_of": "2026-03-01T00:00:00Z",
+  "transaction_as_of": "2026-04-30T00:00:00Z",
+  "count": 7,
+  "memories": [...]
+}
+```
+
+### Query endpoint
+
+`/agent/query` (semantic Q&A) accepts the same params. When either is set, the LLM frames its answer as a historical state — opening with 'as of \<date\>...' rather than current reality.
+
+```bash
+curl -X POST 'https://api.aurra.us/agent/query' \
+  -H 'Authorization: Bearer $AURRA_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "question": "What did the system know about Alice?",
+    "transaction_as_of": "2026-04-15T00:00:00Z"
+  }'
+```
+
+Sample response:
+
+```json
+{
+  "question": "What did the system know about Alice?",
+  "answer": "As of April 15, 2026, the system believed Alice was a senior engineer at Acme Corp...",
+  "transaction_as_of": "2026-04-15T00:00:00Z",
+  "memories_searched": 4
+}
+```
+
+## SDK examples
+
+### Python (aurra >= 0.6.0)
+
+```python
+from aurra import Aurra
+
+aurra = Aurra(api_key='aurra_...')
+
+# List memories the system believed on a given date
+memories = aurra.memories.list(
+    transaction_as_of='2026-04-15T00:00:00Z',
+)
+
+# Full bi-temporal query
+memories = aurra.memories.list(
+    as_of='2026-03-01T00:00:00Z',
+    transaction_as_of='2026-04-30T00:00:00Z',
+)
+
+# Q&A with transaction-time context
+result = aurra.memories.query(
+    question='What did we know about Alice?',
+    transaction_as_of='2026-04-15T00:00:00Z',
+)
+print(result.answer)  # 'As of April 15...'
+```
+
+### JavaScript (aurra >= 0.5.0)
+
+```typescript
+import { Aurra } from 'aurra';
+
+const aurra = new Aurra({ apiKey: 'aurra_...' });
+
+// Transaction-time list
+const memories = await aurra.memories.list({
+  transactionAsOf: '2026-04-15T00:00:00Z',
+});
+
+// Full bi-temporal query
+const memories2 = await aurra.memories.list({
+  asOf: '2026-03-01T00:00:00Z',
+  transactionAsOf: '2026-04-30T00:00:00Z',
+});
+
+// Q&A with transaction-time context
+const result = await aurra.memories.query({
+  question: 'What did we know about Alice?',
+  transactionAsOf: '2026-04-15T00:00:00Z',
+});
+```
+
+Note the camelCase in JS (`transactionAsOf`) vs snake_case in Python (`transaction_as_of`). The wire format is always snake_case.
+
+## When supersession sets transaction_time_end
+
+When [supersede](/docs/api-reference/supersede) is called (manually or via [Level 2 auto-supersession](/docs/level-2-supersession)), the OLD row is updated:
+
+- `valid_to` is set to the supersession moment (Level 1 — the fact stopped being true)
+- `superseded_by` points to the new row (Level 1 — pointer to the replacement)
+- `transaction_time_end` is set to the supersession moment (Level 3 — the system stopped believing)
+
+The new replacement row gets `transaction_time_start = now()` and `transaction_time_end = null`.
+
+This is what enables the time-travel — every supersession leaves a complete record of what the system thought, when.
+
+## Use cases
+
+**Audit and compliance.** 'Show me what the agent recommended on March 5, with the memories it actually had at the time.' A regulator or auditor sees the full chain: agent action + the data state it acted on.
+
+**Debugging drift.** 'Why did the agent give a different answer last Tuesday than it does today?' Run the same query with `transaction_as_of=last_tuesday` to reconstruct the state.
+
+**Post-mortem.** 'Stale data caused this incident — when did we actually learn the corrected fact?' Difference between `valid_from` (when the fact became true in the world) and `transaction_time_start` (when the system learned) is the latency — sometimes the gap itself is the bug.
+
+**HR / legal review.** 'Did our system know about Alice's promotion when it sent the rejection email?' `transaction_as_of=email_send_time` tells you what was in memory at that exact moment.
+
+## Limitations (v0.1)
+
+- Semantic search (`/agent/query`) on the **untenanted** path uses post-hoc filtering — the SQL function `match_memories` returns vector-ranked candidates and the bi-temporal filter runs in Python afterward. Tenanted queries filter at the SQL level (more efficient). For very large memory stores, prefer tenanted queries when doing time travel.
+- `transaction_time_start` is set to `NOW()` on insert — there is no facility for backdating the transaction time of a newly-imported memory. If you need this, set the row's `created_at` and `transaction_time_start` directly via the database.
+- Index optimization: `(transaction_time_start, transaction_time_end)` is indexed, but combined with `as_of` predicates the optimizer may not always pick the optimal plan. Monitor query latency on large datasets.
+
+## Next steps
+
+- [Bi-temporal Memory](/docs/bi-temporal) — the conceptual foundation. Read this first if you skipped here directly.
+- [Auto-Supersession (Level 2)](/docs/level-2-supersession) — how Aurra detects supersessions automatically and updates `transaction_time_end` along the way.
+- [Memories API](/docs/api-reference/memories) — full reference for the `list` and `query` endpoints, including all bi-temporal query params.
+- [Audit API](/docs/api-reference/audit) — inspect every event that affected a single memory.

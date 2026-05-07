@@ -1,0 +1,137 @@
+---
+title: LangChain Integration
+description: Drop-in BaseChatMessageHistory backed by Aurra. Works with RunnableWithMessageHistory and any LangChain 1.0+ runnable.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`aurra-langchain` is a separate Python package that lets your LangChain agents use Aurra as a memory backend — replacing the in-memory or SQLite-backed `ChatMessageHistory` classes with one that gives you bi-temporal versioning, citations, multi-tenancy, and auto-supersession out of the box.
+
+Targets **LangChain 1.0+** and uses the modern `RunnableWithMessageHistory` pattern.
+
+## Installation
+
+```bash
+pip install aurra-langchain
+```
+
+This pulls in `aurra >= 0.5.0` and `langchain-core >= 1.0.0` as dependencies.
+
+## Basic usage
+
+```python
+from aurra_langchain import AurraChatMessageHistory
+
+history = AurraChatMessageHistory(
+    api_key='aurra_...',
+    session_id='user-42-conv-7',
+    tenant_id='acme-corp',  # optional multi-tenant scope
+)
+
+history.add_user_message('My favorite coffee is from Stumptown.')
+history.add_ai_message('Got it, noted.')
+
+# Reads back as LangChain messages, oldest-first
+for msg in history.messages:
+    print(f'{type(msg).__name__}: {msg.content}')
+```
+
+## With RunnableWithMessageHistory
+
+Wire it up like any other LangChain history backend:
+
+```python
+from aurra_langchain import AurraChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_anthropic import ChatAnthropic
+
+def get_session_history(session_id: str):
+    return AurraChatMessageHistory(
+        api_key='aurra_...',
+        session_id=session_id,
+        tenant_id='acme-corp',
+    )
+
+prompt = ChatPromptTemplate.from_messages([
+    ('system', 'You are a helpful assistant with memory.'),
+    MessagesPlaceholder('history'),
+    ('human', '{input}'),
+])
+
+chain = prompt | ChatAnthropic(model='claude-haiku-4-5-20251001')
+
+with_history = RunnableWithMessageHistory(
+    chain,
+    get_session_history,
+    input_messages_key='input',
+    history_messages_key='history',
+)
+
+# Each turn writes to Aurra automatically
+with_history.invoke(
+    {'input': 'My favorite coffee is Stumptown.'},
+    config={'configurable': {'session_id': 'user-42-conv-7'}},
+)
+```
+
+## How it works under the hood
+
+`AurraChatMessageHistory` buffers messages locally as a `(user, ai)` pair. When both sides of an exchange are present, the pair is sent to Aurra's `/agent/memories` endpoint in **messages mode** — Aurra's extractor LLM atomizes the exchange into individual factual memories.
+
+The `messages` getter calls `/agent/memories?tenant_id=...`, filters by `channel == session_id`, and reconstructs `HumanMessage` / `AIMessage` objects from each memory's `original_message` field using a `User:` / `Assistant:` prefix heuristic.
+
+```
+LangChain agent
+       |
+       | add_user_message + add_ai_message
+       v
+AurraChatMessageHistory  --->  /agent/memories (messages mode)
+       ^                              |
+       | messages getter              | extracts atomic facts
+       |                              v
+       +--------------------- Aurra (bi-temporal store)
+```
+
+<Callout type='warn'>
+**Lossy round-trip.** Aurra is a fact store, not a verbatim message log. `original_message` preserves up to 500 chars per turn, and the extractor may refine wording. If you need 100%-faithful conversation replay, use a different LangChain backend (or pair Aurra with one).
+</Callout>
+
+## Configuration
+
+| Param | Type | Default | Description |
+| --- | --- | --- | --- |
+| `api_key` | str | required | Your Aurra API key (from app.aurra.us) |
+| `session_id` | str | required | Conversation identifier — groups extracted memories |
+| `tenant_id` | str | None | Multi-tenant scope (optional) |
+| `base_url` | str | https://api.aurra.us | Override for self-hosted/staging |
+| `auto_supersede` | bool | None | Per-key default if None |
+| `max_messages_returned` | int | 50 | Cap on `history.messages` length |
+
+## What you get
+
+- **[Bi-temporal versioning](/docs/bi-temporal)** — every conversation turn is captured with valid-time and transaction-time semantics, so you can replay agent decisions with the exact memories the agent had at the time.
+- **Citation-grounded retrieval** — when memories are surfaced via `/agent/query`, each carries a citation back to the original turn.
+- **Multi-tenant isolation** — pass `tenant_id` per session to scope memories per-user without index sprawl.
+- **[Auto-supersession](/docs/level-2-supersession)** — Aurra's classifier detects when a new fact replaces an old one within the same session.
+- **No vendor lock-in** — your data stays in Aurra; you can read it directly from the API or other SDKs.
+
+## Limitations (v0.1.0)
+
+- **Streaming not supported.** Each turn is buffered until the AI message arrives, then flushed. PRs welcome.
+- **No `BaseRetriever` class yet.** If you want fact-based retrieval (vs. conversation history), use `aurra.memories.query()` directly. Retriever class deferred to v0.2.0.
+- **No `Tool` wrapper yet.** If you want explicit tool-calls for memory operations from the agent, use the core SDK directly. Tool wrapper deferred to v0.2.0.
+- **Errors are silently swallowed.** Network blips during `add_user_message` / `add_ai_message` are caught and ignored to avoid breaking LangChain runs. v0.1.1 will add a configurable error hook.
+- **No support for the legacy `BaseMemory` pattern.** LangChain 1.0+ removed it. Use `RunnableWithMessageHistory` with `AurraChatMessageHistory` instead.
+
+## Source and contributing
+
+- **PyPI:** [aurra-langchain](https://pypi.org/project/aurra-langchain/)
+- **Source:** part of the main Aurra monorepo
+- **Issues / PRs:** [github.com/aurra-memory](https://github.com/aurra-memory)
+
+## Next steps
+
+- [Quickstart](/docs/quickstart) — if you haven't set up an Aurra account yet.
+- [Bi-temporal Memory](/docs/bi-temporal) — the foundation everything else builds on.
+- [Auto-Supersession](/docs/level-2-supersession) — turn on `auto_supersede` for cleaner memory state.

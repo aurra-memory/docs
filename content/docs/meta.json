@@ -5,11 +5,17 @@
     "index",
     "quickstart",
     "api-reference",
-    "---Core Features---",
+    "---Bi-temporal---",
     "bi-temporal",
+    "transaction-time",
     "level-2-supersession",
+    "---Retrieval signals---",
+    "freshness",
+    "importance-score",
     "citations",
     "source-filtering",
+    "---Integrations---",
+    "langchain",
     "byo-llm"
   ]
 }

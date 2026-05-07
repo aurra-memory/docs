@@ -14,9 +14,11 @@ Aurra tracks **two separate times** for every memory:
 | Time | Question it answers | Field |
 | --- | --- | --- |
 | **Valid time** (fact time) | When was this fact true in the real world? | `valid_from`, `valid_to` |
-| **Transaction time** (system time) | When did Aurra learn about it? | `created_at` |
+| **Transaction time** (system time) | When did Aurra believe it was current? | `transaction_time_start`, `transaction_time_end` |
 
-These are not the same. You might record today (`created_at = 2026-05-05`) that Alice started at Acme Corp last year (`valid_from = 2025-03-15`). A naive system that only stores active facts can't represent this difference.
+These are not the same. You might record today (`transaction_time_start = 2026-05-05`) that Alice started at Acme Corp last year (`valid_from = 2025-03-15`). A naive system that only stores active facts can't represent this difference.
+
+`created_at` is the moment a row was inserted into the database — it's similar to `transaction_time_start` for newly-created rows, but it doesn't track when the system stops believing a fact (`transaction_time_end`). Use the `transaction_time_*` fields when you need to ask 'what did the system know on date X?' — see [Transaction-time queries](#transaction-time-queries) below.
 
 <Callout type="info">
 "*Bi-temporal" is a term borrowed from database research** (Snodgrass, 1999). It's how enterprise systems like SAP and Oracle handle financial history and regulatory compliance. Aurra applies the same idea to agent memory.
@@ -46,12 +48,14 @@ Aurra preserves both times so you can always reconstruct state.
 Every memory row has this shape in the database:
 
 ```
-id            : UUID
-decision      : "Alice works at Acme Corp"
-valid_from    : 2025-03-15T00:00:00Z      <-- when the fact became true
-valid_to      : null                      <-- null = still current
-superseded_by : null                      <-- null = not replaced
-created_at    : 2026-05-05T23:09:59Z      <-- when the row was inserted
+id                     : UUID
+decision               : "Alice works at Acme Corp"
+valid_from             : 2025-03-15T00:00:00Z      <-- when the fact became true (Level 1)
+valid_to               : null                      <-- null = still current (Level 1)
+superseded_by          : null                      <-- null = not replaced (Level 1)
+transaction_time_start : 2026-05-05T23:09:59Z      <-- when system started believing (Level 3)
+transaction_time_end   : null                      <-- null = system still believes (Level 3)
+created_at             : 2026-05-05T23:09:59Z      <-- when the row was inserted
 ```
 
 When you call [`POST /memories/{memory_id}/supersede`](/docs/api-reference/supersede) to replace Alice's job:
@@ -68,7 +72,13 @@ When you call [`POST /memories/{memory_id}/supersede`](/docs/api-reference/super
            superseded_by: null
 ```
 
-**Everything stays.** The old row is never modified except for its `valid_to` and `superseded_by` fields.
+**Everything stays.** The old row is only modified to record the moment of supersession:
+
+- `valid_to` — when the fact stopped being true in the world (Level 1)
+- `superseded_by` — pointer to the new replacement (Level 1)
+- `transaction_time_end` — when the system stopped believing it was current (Level 3, F4)
+
+The other columns (`decision`, `valid_from`, `transaction_time_start`, `created_at`) are never touched.
 
 ## Point-in-time queries
 
@@ -98,7 +108,10 @@ Every memory response includes a `temporal` object for quick boolean checks:
   "superseded_by": null,
   "is_current": true,
   "is_expired": false,
-  "is_superseded": false
+  "is_superseded": false,
+  "transaction_time_start": "2026-05-05T23:09:59.008804+00:00",
+  "transaction_time_end": null,
+  "is_known_current": true
 }
 ```
 
@@ -107,8 +120,36 @@ Every memory response includes a `temporal` object for quick boolean checks:
 | `is_current` | `true` if this row is the active truth (not expired, not superseded). |
 | `is_expired` | `true` if `valid_to` is set without a `superseded_by` (explicit expiry, no replacement). |
 | `is_superseded` | `true` if `superseded_by` points to a newer row. |
+| `is_known_current` | `true` if `transaction_time_end` is null — the system currently believes this fact (Level 3). |
 
-Exactly one of `is_current`, `is_expired`, `is_superseded` is true at any point.
+`is_current` and `is_known_current` answer different questions:
+
+- `is_current` = "Is this fact still TRUE IN THE WORLD?" (Level 1)
+- `is_known_current` = "Does the SYSTEM still believe this is true?" (Level 3)
+
+For most reads they match. They diverge during the gap between something stopping being true and the system being told. Exactly one of `is_current`, `is_expired`, `is_superseded` is true at any point.
+
+## Transaction-time queries
+
+Aurra supports time travel along the **transaction time** axis too — answering "what did the system believe at point X?" rather than "what was true at point X?"
+
+```bash
+curl "https://api.aurra.us/agent/memories?transaction_as_of=2026-04-15T00:00:00Z" \\
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+This returns every memory that the system believed was current on April 15, 2026 — even if those facts have since been superseded.
+
+Combine `as_of` and `transaction_as_of` for full bi-temporal queries:
+
+```bash
+curl "https://api.aurra.us/agent/memories?as_of=2026-03-01T00:00:00Z&transaction_as_of=2026-04-15T00:00:00Z" \\
+  -H "Authorization: Bearer $AURRA_API_KEY"
+```
+
+This answers: "As of April 15 (transaction time), what did we think was true on March 1 (valid time)?" — the canonical audit query.
+
+See the [Transaction-time](/docs/transaction-time) page for the full Level 3 surface, including SDK examples, the 2x2 of bi-temporal queries, and use cases.
 
 ## Mental model
 
@@ -140,6 +181,7 @@ If you're building a personal chatbot, you likely don't need point-in-time queri
 
 ## Next steps
 
+- [Transaction time (Level 3)](/docs/transaction-time) - Querying what the system BELIEVED, not just what was true. Audit-compliance use cases.
 - [Auto-Supersession (Level 2)](/docs/level-2-supersession) - how Aurra detects and applies supersessions automatically.
 - [Timeline API](/docs/api-reference/timeline) - retrieve the full chain for any fact.
 - [Audit API](/docs/api-reference/audit) - inspect every event that affected a single memory.

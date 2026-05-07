@@ -1,0 +1,150 @@
+---
+title: Importance Score
+description: How important is this memory? Aurra's extractor LLM scores every memory 1-10 at write time, exposed in retrieval responses for ranking and filtering.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Every memory Aurra extracts carries an **importance score** — an integer between `1` and `10` that the extractor LLM assigns based on how significant the underlying fact is for future recall.
+
+Unlike [freshness](/docs/freshness) (which decays with age), importance is set at write time and stays with the memory. They're orthogonal signals — one tells you how *recent* a fact is, the other tells you how *important*.
+
+<Callout type='warn'>
+**Migration from v0.x — `importance` is now `importance_score`.**
+
+The legacy `importance` string field (`'low'`/`'medium'`/`'high'`) is deprecated and removed in v0.6.0. Use `importance_score` (integer 1-10) instead.
+
+Mapping for existing code: `high=8`, `medium=5`, `low=2`. SDKs (Python >= 0.5.0, JS >= 0.4.0) accept the legacy field but emit a deprecation warning.
+</Callout>
+
+## What it looks like
+
+Every memory in `/agent/memories` and `/agent/query` responses includes an `importance_score`:
+
+```json
+{
+  "memories": [
+    {
+      "id": "ab7e0d40-...",
+      "decision": "User prefers async communication",
+      "importance_score": 6,
+      ...
+    }
+  ]
+}
+```
+
+## How the LLM assigns it
+
+Aurra's extractor (Claude Opus by default) reads the conversation and assigns a score per fact using this anchor scale:
+
+| Score | Meaning | Example |
+| --- | --- | --- |
+| **1-2** | Trivial / passing detail (rarely surfaced) | 'Mentioned the weather'; 'Said hi' |
+| **3-4** | Minor preference or context | 'Prefers coffee over tea' |
+| **5** | Normal default (typical preference, hobby, routine fact) | 'Likes hiking on weekends' |
+| **6-7** | Useful identity, role, ongoing commitment | 'Works as a backend engineer' |
+| **8** | Key identity (name, employer, primary location) | 'Name is Alice'; 'Works at Acme Corp' |
+| **9-10** | Critical / time-sensitive | 'Allergic to peanuts'; 'Project deadline is Friday'; 'SSN is...' |
+
+The score is the LLM's best judgment, calibrated by these anchors. It may not always be perfect — it's a useful signal, not a guarantee.
+
+## Manual override (content mode)
+
+When you write memories using the verbatim `content` mode (instead of LLM extraction), you set the score yourself:
+
+```bash
+curl -X POST 'https://api.aurra.us/agent/memories' \
+  -H 'Authorization: Bearer $AURRA_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "content": "Patient is allergic to penicillin",
+    "topic": "Medical",
+    "importance_score": 10
+  }'
+```
+
+If you don't pass `importance_score`, it defaults to `5`. Out-of-range values are clamped to the nearest valid value (1 or 10).
+
+## Backward compatibility
+
+If you (or your SDK) sends the legacy `importance` string, Aurra maps it to a numeric score:
+
+| Legacy string | Mapped score |
+| --- | --- |
+| `'high'` | `8` |
+| `'medium'` | `5` |
+| `'low'` | `2` |
+| anything else | `5` (neutral fallback) |
+
+This mapping happens server-side. Old SDK versions continue to work, but new code should use `importance_score` directly.
+
+## SDK examples
+
+### Python (aurra >= 0.5.0)
+
+```python
+from aurra import Aurra
+
+aurra = Aurra(api_key='aurra_...')
+
+# Write with explicit importance
+aurra.memories.add(
+    content='Patient is allergic to penicillin',
+    topic='Medical',
+    importance_score=10,
+)
+
+# Filter retrieval by importance — sort and take top by importance_score
+memories = aurra.memories.list()
+important = [m for m in memories if m['importance_score'] >= 8]
+for m in important:
+    print(f"[{m['importance_score']}] {m['decision']}")
+```
+
+### JavaScript (aurra >= 0.4.0)
+
+```typescript
+import { Aurra } from 'aurra';
+
+const aurra = new Aurra({ apiKey: 'aurra_...' });
+
+await aurra.memories.add({
+  content: 'Patient is allergic to penicillin',
+  topic: 'Medical',
+  importanceScore: 10,
+});
+
+const result = await aurra.memories.list();
+const important = result.memories.filter(m => m.importanceScore >= 8);
+```
+
+Note the camelCase in JS (`importanceScore`) vs snake_case in Python (`importance_score`). The wire format is always snake_case.
+
+## When to use it
+
+**Filter retrieval by criticality.** When showing memories to a downstream LLM, drop `score < 3` to reduce noise.
+
+**Surface high-importance facts.** Show all `score >= 8` memories prominently in your UI ('Critical for context').
+
+**Combine with freshness.** A fact that's both stale (low freshness) and trivial (low importance) is a good cleanup candidate.
+
+**Audit signal.** If your extractor consistently flags facts as `9-10`, double-check your prompt — the model may be overrating.
+
+## What it doesn't do
+
+- **Doesn't filter retrieval automatically.** Even score=1 memories are returned. You decide what to do with them.
+- **Doesn't change extraction.** The score is added per memory after extraction; lower-scored facts are still extracted and stored.
+- **Doesn't replace [importance for the LLM's prompt context].** If your downstream LLM has a context budget, you're still responsible for filtering.
+
+## Limitations
+
+- Scores are LLM-assigned, not absolute. The same fact in two different conversations might get slightly different scores.
+- Manual writes (content mode) bypass LLM judgment entirely — score reflects whatever you passed (or `5` default).
+- The legacy `importance` string field will be fully removed in `v1.0`. Plan migration in the meantime.
+
+## Next steps
+
+- [Freshness Score](/docs/freshness) — the recency signal that pairs with importance.
+- [Memories API](/docs/api-reference/memories) — full reference for `add`, `list`, and `query`.
+- [Bi-temporal Memory](/docs/bi-temporal) — the underlying time model.
